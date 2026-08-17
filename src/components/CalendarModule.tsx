@@ -6,6 +6,7 @@ import {
   deleteSchoolEvent 
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   Calendar as CalendarIcon, 
   Plus, 
@@ -30,6 +31,7 @@ export const CalendarModule: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<SchoolEvent | null>(null);
 
   // New Event Form
   const [title, setTitle] = useState('');
@@ -243,11 +245,7 @@ export const CalendarModule: React.FC = () => {
 
                     {isCommittee && (
                       <button
-                        onClick={() => {
-                          if (window.confirm('确定要删除此条校历日程吗？')) {
-                            deleteSchoolEvent(event.id);
-                          }
-                        }}
+                        onClick={() => setEventToDelete(event)}
                         className="p-1 text-slate-400 hover:text-rose-600 rounded-md transition-colors"
                         title="删除事件"
                       >
@@ -370,6 +368,19 @@ export const CalendarModule: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Confirm Delete Modal */}
+      <ConfirmModal
+        isOpen={Boolean(eventToDelete)}
+        title="确认删除该校历事件？"
+        message={`确定要删除 "${eventToDelete?.title}" (${eventToDelete?.date}) 吗？删除后班级校历将不再显示该日程。`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (eventToDelete) {
+            await deleteSchoolEvent(eventToDelete.id);
+          }
+        }}
+        onClose={() => setEventToDelete(null)}
+      />
     </div>
   );
 };

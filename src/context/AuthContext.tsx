@@ -94,7 +94,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (user) {
         await fetchOrCreateProfile(user);
       } else {
-        // If not logged in, check if we have adminOverride or local profile
+        // If not logged in, auto sign in anonymously to ensure Firestore has valid connection
+        try {
+          await signInAnonymously(auth);
+        } catch (anonErr) {
+          console.warn('Anonymous auth note:', anonErr);
+        }
         if (!adminOverride) {
           setProfile((prev) => (prev?.role === 'super_admin' ? prev : null));
         }

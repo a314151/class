@@ -7,6 +7,7 @@ import {
   deletePoll 
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   Vote, 
   Plus, 
@@ -25,6 +26,7 @@ export const PollModule: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'expired'>('all');
   const [showStatusDropdown, setShowStatusDropdown] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [pollToDelete, setPollToDelete] = useState<Poll | null>(null);
 
   // New poll form
   const [title, setTitle] = useState('');
@@ -249,11 +251,7 @@ export const PollModule: React.FC = () => {
 
                   {isCommittee && (
                     <button
-                      onClick={() => {
-                        if (window.confirm('确定要删除此项投票吗？')) {
-                          deletePoll(poll.id);
-                        }
-                      }}
+                      onClick={() => setPollToDelete(poll)}
                       className="p-1 text-slate-400 hover:text-rose-600 rounded-md transition-colors"
                       title="删除投票"
                     >
@@ -478,6 +476,19 @@ export const PollModule: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Confirm Delete Modal */}
+      <ConfirmModal
+        isOpen={Boolean(pollToDelete)}
+        title="确认删除该投票？"
+        message={`确定要删除投票 "${pollToDelete?.title}" 吗？所有已投选票数据也将被一并清除。`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (pollToDelete) {
+            await deletePoll(pollToDelete.id);
+          }
+        }}
+        onClose={() => setPollToDelete(null)}
+      />
     </div>
   );
 };

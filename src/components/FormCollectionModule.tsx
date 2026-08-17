@@ -8,6 +8,7 @@ import {
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
 import { R2UploadButton } from './R2UploadButton';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   ClipboardList, 
   Plus, 
@@ -16,9 +17,9 @@ import {
   Clock, 
   Trash2, 
   Eye, 
-  ChevronDown,
-  MoreVertical,
-  X
+  ChevronDown, 
+  MoreVertical, 
+  X 
 } from 'lucide-react';
 
 export const FormCollectionModule: React.FC = () => {
@@ -29,6 +30,7 @@ export const FormCollectionModule: React.FC = () => {
   const [showMoreActions, setShowMoreActions] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [viewSubmissionsForm, setViewSubmissionsForm] = useState<FormCollection | null>(null);
+  const [formToDelete, setFormToDelete] = useState<FormCollection | null>(null);
 
   // Form fill state
   const [formData, setFormData] = useState<Record<string, any>>({});
@@ -267,9 +269,7 @@ export const FormCollectionModule: React.FC = () => {
                   <button
                     onClick={() => {
                       setShowMoreActions(false);
-                      if (window.confirm('确定要删除此项征集表单吗？')) {
-                        deleteForm(activeForm.id);
-                      }
+                      setFormToDelete(activeForm);
                     }}
                     className="w-full flex items-center gap-2 px-2.5 py-1.5 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg text-left font-medium"
                   >

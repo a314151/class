@@ -356,6 +356,15 @@ export const toggleLikeWish = async (wishId: string, userUid: string, hasLiked: 
   }
 };
 
+export const deleteBirthdayWish = async (id: string): Promise<void> => {
+  try {
+    await deleteDoc(doc(db, 'birthdayWishes', id));
+  } catch (e) {
+    handleFirestoreError(e, OperationType.DELETE, `birthdayWishes/${id}`);
+    throw e;
+  }
+};
+
 // ================= POLLS (投票) =================
 export const subscribeToPolls = (callback: (polls: Poll[]) => void) => {
   const q = query(collection(db, 'polls'), orderBy('createdAt', 'desc'));

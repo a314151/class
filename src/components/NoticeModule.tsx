@@ -11,6 +11,7 @@ import {
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
 import { R2UploadButton } from './R2UploadButton';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   Bell, 
   Pin, 
@@ -42,6 +43,7 @@ export const NoticeModule: React.FC = () => {
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [noticeToDelete, setNoticeToDelete] = useState<Notice | null>(null);
 
   // New Notice form
   const [title, setTitle] = useState('');
@@ -276,11 +278,7 @@ export const NoticeModule: React.FC = () => {
 
                     {isCommittee && (
                       <button
-                        onClick={() => {
-                          if (window.confirm('确定要删除此条通知吗？')) {
-                            deleteNotice(notice.id);
-                          }
-                        }}
+                        onClick={() => setNoticeToDelete(notice)}
                         className="p-1 text-slate-400 hover:text-rose-600 rounded-md transition-colors"
                         title="删除通知"
                       >
@@ -445,6 +443,19 @@ export const NoticeModule: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Confirm Delete Modal */}
+      <ConfirmModal
+        isOpen={Boolean(noticeToDelete)}
+        title="确认删除该通知？"
+        message={`删除后该通知 "${noticeToDelete?.title}" 将无法恢复，班级同学将不再可见。`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (noticeToDelete) {
+            await deleteNotice(noticeToDelete.id);
+          }
+        }}
+        onClose={() => setNoticeToDelete(null)}
+      />
     </div>
   );
 };
