@@ -1,0 +1,123 @@
+{
+  "entities": {
+    "users": {
+      "fields": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "name": { "type": "string", "description": "User real name or display name" },
+        "email": { "type": "string", "description": "User email" },
+        "studentId": { "type": "string", "description": "Student ID" },
+        "role": { "type": "string", "description": "super_admin | committee | member" },
+        "avatar": { "type": "string", "description": "Avatar URL" },
+        "birthday": { "type": "string", "description": "YYYY-MM-DD" },
+        "phone": { "type": "string", "description": "Contact phone" },
+        "bio": { "type": "string", "description": "Personal bio" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      }
+    },
+    "notices": {
+      "fields": {
+        "title": { "type": "string", "description": "Notice title" },
+        "content": { "type": "string", "description": "Notice content" },
+        "category": { "type": "string", "description": "Category" },
+        "isPinned": { "type": "boolean", "description": "Pinned status" },
+        "authorName": { "type": "string", "description": "Author name" },
+        "authorUid": { "type": "string", "description": "Author UID" },
+        "readBy": { "type": "array", "description": "List of user UIDs who read" },
+        "createdAt": { "type": "string", "description": "Created timestamp" }
+      }
+    },
+    "schedules": {
+      "fields": {
+        "dayOfWeek": { "type": "number", "description": "1 to 7 (Mon to Sun)" },
+        "period": { "type": "number", "description": "Class period index" },
+        "subject": { "type": "string", "description": "Course name" },
+        "teacher": { "type": "string", "description": "Teacher name" },
+        "room": { "type": "string", "description": "Classroom" },
+        "timeRange": { "type": "string", "description": "e.g. 08:00 - 08:45" }
+      }
+    },
+    "schoolEvents": {
+      "fields": {
+        "title": { "type": "string", "description": "Event title" },
+        "date": { "type": "string", "description": "YYYY-MM-DD" },
+        "category": { "type": "string", "description": "holiday | exam | activity | academic" },
+        "description": { "type": "string", "description": "Details" }
+      }
+    },
+    "messages": {
+      "fields": {
+        "senderUid": { "type": "string", "description": "Sender UID" },
+        "senderName": { "type": "string", "description": "Sender Name" },
+        "senderAvatar": { "type": "string", "description": "Sender Avatar" },
+        "senderRole": { "type": "string", "description": "Sender Role" },
+        "content": { "type": "string", "description": "Message text" },
+        "attachmentUrl": { "type": "string", "description": "Attachment or Image URL" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      }
+    },
+    "directMessages": {
+      "fields": {
+        "senderUid": { "type": "string", "description": "Sender UID" },
+        "recipientUid": { "type": "string", "description": "Recipient UID" },
+        "senderName": { "type": "string", "description": "Sender Name" },
+        "senderAvatar": { "type": "string", "description": "Sender Avatar" },
+        "content": { "type": "string", "description": "Message text" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      }
+    },
+    "birthdayWishes": {
+      "fields": {
+        "targetUid": { "type": "string", "description": "Birthday person UID" },
+        "targetName": { "type": "string", "description": "Birthday person name" },
+        "senderUid": { "type": "string", "description": "Sender UID" },
+        "senderName": { "type": "string", "description": "Sender name" },
+        "message": { "type": "string", "description": "Greeting message" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      }
+    },
+    "polls": {
+      "fields": {
+        "title": { "type": "string", "description": "Poll title" },
+        "description": { "type": "string", "description": "Poll description" },
+        "options": { "type": "array", "description": "List of options" },
+        "isMultiple": { "type": "boolean", "description": "Multiple choice" },
+        "isAnonymous": { "type": "boolean", "description": "Anonymous voting" },
+        "expiresAt": { "type": "string", "description": "Expiration date" },
+        "authorUid": { "type": "string", "description": "Author UID" },
+        "votes": { "type": "map", "description": "UID -> selected option IDs" }
+      }
+    },
+    "forms": {
+      "fields": {
+        "title": { "type": "string", "description": "Form title" },
+        "description": { "type": "string", "description": "Form description" },
+        "fields": { "type": "array", "description": "Form field definitions" },
+        "deadline": { "type": "string", "description": "Deadline timestamp" },
+        "authorUid": { "type": "string", "description": "Author UID" },
+        "submissions": { "type": "map", "description": "UID -> submission data" }
+      }
+    },
+    "feedbacks": {
+      "fields": {
+        "title": { "type": "string", "description": "Feedback title" },
+        "content": { "type": "string", "description": "Feedback content" },
+        "category": { "type": "string", "description": "Category" },
+        "isAnonymous": { "type": "boolean", "description": "Is anonymous" },
+        "authorUid": { "type": "string", "description": "Author UID" },
+        "authorName": { "type": "string", "description": "Author display name" },
+        "status": { "type": "string", "description": "pending | processing | resolved" },
+        "reply": { "type": "string", "description": "Committee reply" },
+        "createdAt": { "type": "string", "description": "Timestamp" }
+      }
+    },
+    "settings": {
+      "fields": {
+        "className": { "type": "string", "description": "Class display name" },
+        "motto": { "type": "string", "description": "Class motto" },
+        "semester": { "type": "string", "description": "Current semester" },
+        "cloudflareWorkerUrl": { "type": "string", "description": "Worker proxy URL" },
+        "r2BucketName": { "type": "string", "description": "R2 bucket name" }
+      }
+    }
+  }
+}

@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Users collection: readable by all, writable by authenticated or self
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Notices: readable by all, writable by authenticated or committee/admin
+    match /notices/{noticeId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Schedules: readable by all, writable by authenticated
+    match /schedules/{scheduleId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // School Events: readable by all, writable by authenticated
+    match /schoolEvents/{eventId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Public Class Chat: readable by all, writable by authenticated
+    match /messages/{messageId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Direct Messages: readable and writable
+    match /directMessages/{dmId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Birthday Wishes: readable by all, writable by authenticated
+    match /birthdayWishes/{wishId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Polls: readable by all, writable by authenticated
+    match /polls/{pollId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Forms: readable by all, writable by authenticated
+    match /forms/{formId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Feedback: readable by all, writable by authenticated
+    match /feedbacks/{feedbackId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Settings: readable by all, writable by authenticated
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}
+

@@ -1,0 +1,6 @@
+{
+  "name": "班级空间",
+  "description": "多功能班级管理与智慧交流协作平台，支持重要通知、生日祝福、学校日历、班级大厅群聊与私聊、意见信箱、民主投票、表格征集及多级角色权限控制。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
