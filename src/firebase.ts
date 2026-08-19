@@ -8,7 +8,6 @@ import {
   signOut, 
   onAuthStateChanged, 
   updateProfile,
-  signInAnonymously,
   sendPasswordResetEmail
 } from 'firebase/auth';
 import { 
@@ -33,6 +32,5 @@ export {
   signOut,
   onAuthStateChanged,
   updateProfile,
-  signInAnonymously,
   sendPasswordResetEmail
 };

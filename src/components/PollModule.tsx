@@ -111,7 +111,15 @@ export const PollModule: React.FC = () => {
   const handleVote = async (poll: Poll, optionId: string) => {
     if (!profile) return;
     try {
-      await votePoll(poll.id, [optionId], profile.uid, poll.options, poll.isMultiple);
+      const currentSelections = poll.options
+        .filter((option) => option.voterUids.includes(profile.uid))
+        .map((option) => option.id);
+      const nextSelections = poll.isMultiple
+        ? currentSelections.includes(optionId)
+          ? currentSelections.filter((id) => id !== optionId)
+          : [...currentSelections, optionId]
+        : [optionId];
+      await votePoll(poll.id, nextSelections, profile.uid, poll.options, poll.isMultiple);
     } catch (err) {
       console.error('Vote failed:', err);
     }

@@ -76,24 +76,26 @@ export const ChatModule: React.FC = () => {
   useEffect(() => {
     const unsub = subscribeToUsers((data) => {
       setUsers(data);
-      if (data.length > 0 && !selectedDmUser && profile) {
-        const other = data.find(u => u.uid !== profile.uid);
-        if (other) setSelectedDmUser(other);
-      }
+      setSelectedDmUser((current) => {
+        if (!profile) return null;
+        return (current && data.find((user) => user.uid === current.uid && user.uid !== profile.uid))
+          || data.find((user) => user.uid !== profile.uid)
+          || null;
+      });
     });
     return () => unsub();
-  }, [profile]);
+  }, [profile?.uid]);
 
   // Subscribe to direct messages when DM partner changes
   useEffect(() => {
-    if (!profile || !selectedDmUser) return;
+    if (chatMode !== 'direct' || !profile || !selectedDmUser) return;
     const convoId = getConversationId(profile.uid, selectedDmUser.uid);
     const unsub = subscribeToDirectMessages(convoId, (data) => {
       setDirectMessages(data);
       setTimeout(scrollToBottom, 100);
     });
     return () => unsub();
-  }, [profile, selectedDmUser]);
+  }, [chatMode, profile?.uid, selectedDmUser?.uid]);
 
   // Click outside listener
   useEffect(() => {
@@ -305,7 +307,7 @@ export const ChatModule: React.FC = () => {
                               src={msg.attachmentUrl}
                               alt="Attachment"
                               className="max-w-xs max-h-44 rounded-xl object-cover cursor-pointer hover:opacity-95 transition-opacity"
-                              onClick={() => window.open(msg.attachmentUrl, '_blank')}
+                              onClick={() => window.open(msg.attachmentUrl, '_blank', 'noopener,noreferrer')}
                             />
                           </div>
                         )}
@@ -509,7 +511,7 @@ export const ChatModule: React.FC = () => {
                               src={dm.attachmentUrl}
                               alt="Attachment"
                               className="mt-1.5 rounded-xl max-h-36 cursor-pointer"
-                              onClick={() => window.open(dm.attachmentUrl, '_blank')}
+                              onClick={() => window.open(dm.attachmentUrl, '_blank', 'noopener,noreferrer')}
                             />
                           )}
                         </div>

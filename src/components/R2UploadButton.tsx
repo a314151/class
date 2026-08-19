@@ -1,5 +1,15 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, CheckCircle2, AlertCircle, Loader2, FileText, Image as ImageIcon } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+
+const MAX_UPLOAD_SIZE = 10 * 1024 * 1024;
+const MAX_EMBEDDED_FALLBACK_SIZE = 512 * 1024;
+
+const readFileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(reader.result as string);
+  reader.onerror = () => reject(reader.error || new Error('文件读取失败'));
+  reader.readAsDataURL(file);
+});
 
 interface R2UploadButtonProps {
   onUploaded: (fileUrl: string, fileName: string) => void;
@@ -25,7 +35,7 @@ export const R2UploadButton: React.FC<R2UploadButtonProps> = ({
     if (!file) return;
 
     // Check size limit (10MB for client processing)
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size > MAX_UPLOAD_SIZE) {
       alert('文件大小不能超过 10MB');
       return;
     }
@@ -46,36 +56,43 @@ export const R2UploadButton: React.FC<R2UploadButtonProps> = ({
 
         if (response.ok) {
           const resData = await response.json();
-          const uploadedUrl = resData.url || resData.fileUrl || `https://r2.cdn.example.com/${file.name}`;
+          const uploadedUrl = resData.url || resData.fileUrl;
+          if (!uploadedUrl) {
+            throw new Error('上传接口未返回文件地址');
+          }
           onUploaded(uploadedUrl, file.name);
           setStatusMsg('✅ 已成功上传至 Cloudflare R2');
         } else {
-          throw new Error('Worker 响应异常，切换至本地极速存储');
+          throw new Error(`上传接口响应异常 (${response.status})`);
         }
       } else {
-        // Fast Base64 / Local Storage fallback for zero-setup instant experience
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const base64String = reader.result as string;
-          onUploaded(base64String, file.name);
-          setStatusMsg('✅ 附件已就绪');
-        };
-        reader.readAsDataURL(file);
-      }
-    } catch (err: any) {
-      console.warn('Worker upload failed, using Data URL fallback:', err);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64String = reader.result as string;
+        if (file.size > MAX_EMBEDDED_FALLBACK_SIZE) {
+          throw new Error('未配置可用的上传服务，附件不能超过 512KB');
+        }
+        const base64String = await readFileAsDataUrl(file);
         onUploaded(base64String, file.name);
         setStatusMsg('✅ 附件已就绪');
-      };
-      reader.readAsDataURL(file);
+      }
+    } catch (err: any) {
+      console.warn('Worker upload failed:', err);
+      if (file.size <= MAX_EMBEDDED_FALLBACK_SIZE) {
+        try {
+          const base64String = await readFileAsDataUrl(file);
+          onUploaded(base64String, file.name);
+          setStatusMsg('✅ 云端上传失败，已改用小文件内嵌模式');
+        } catch (readError) {
+          console.error('File fallback failed:', readError);
+          setStatusMsg('❌ 文件读取失败，请重试');
+        }
+      } else {
+        setStatusMsg(`❌ ${err?.message || '上传失败，请检查上传服务配置'}`);
+      }
     } finally {
+      setUploading(false);
+      e.target.value = '';
       setTimeout(() => {
-        setUploading(false);
         setStatusMsg(null);
-      }, 2000);
+      }, 3500);
     }
   };
 
@@ -108,8 +125,14 @@ export const R2UploadButton: React.FC<R2UploadButtonProps> = ({
         )}
       </button>
       {statusMsg && (
-        <span className="text-[11px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-          <CheckCircle2 className="w-3 h-3" />
+        <span className={`text-[11px] flex items-center gap-1 ${
+          statusMsg.startsWith('❌')
+            ? 'text-rose-600 dark:text-rose-400'
+            : 'text-emerald-600 dark:text-emerald-400'
+        }`}>
+          {statusMsg.startsWith('❌')
+            ? <AlertCircle className="w-3 h-3" />
+            : <CheckCircle2 className="w-3 h-3" />}
           {statusMsg}
         </span>
       )}

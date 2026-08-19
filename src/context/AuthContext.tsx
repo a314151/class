@@ -8,7 +8,6 @@ import {
   createUserWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
-  signInAnonymously,
   sendPasswordResetEmail
 } from '../firebase';
 import { UserProfile, UserRole } from '../types';
@@ -16,8 +15,8 @@ import {
   getUserProfile, 
   getUserProfileByStudentId, 
   getUserProfileByEmail,
-  saveUserProfile, 
-  cleanupDuplicateUsers 
+  saveUserProfile,
+  cleanupDuplicateUsers
 } from '../services/firestoreService';
 
 interface AuthContextType {
@@ -77,11 +76,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
   const [loading, setLoading] = useState(true);
-
-  // Initialize and run deduplication on start
-  useEffect(() => {
-    cleanupDuplicateUsers().catch((e) => console.warn('Deduplication cleanup notice:', e));
-  }, []);
 
   const getCanonicalAdminProfile = (): UserProfile => ({
     uid: CANONICAL_ADMIN_UID,
@@ -175,29 +169,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let isActive = true;
+    const loadingFallback = window.setTimeout(() => {
+      if (isActive) {
+        setLoading(false);
+      }
+    }, 1500);
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!isActive) return;
+
       setCurrentUser(user);
+      window.clearTimeout(loadingFallback);
+      setLoading(false);
+
       if (user && !user.isAnonymous) {
-        // Only fetch if profile is not already loaded
+        // Refresh a missing profile in the background. Profile I/O must never
+        // block the first paint, especially on high-latency mobile networks.
         if (!profile) {
-          await fetchOrCreateProfile(user);
-        }
-      } else if (!user) {
-        // Ensure anonymous auth for Firestore rules without disrupting active student session
-        try {
-          await signInAnonymously(auth);
-        } catch (anonErr) {
-          console.warn('Anonymous auth note:', anonErr);
+          void fetchOrCreateProfile(user);
         }
       }
-      setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      isActive = false;
+      window.clearTimeout(loadingFallback);
+      unsubscribe();
+    };
   }, []);
 
   const loginWithGoogle = async () => {
-    setLoading(true);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user) {
@@ -206,25 +208,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       console.error('Google Sign-in failed:', error);
       throw error;
-    } finally {
-      setLoading(false);
     }
   };
 
   // Sign up (register) student with studentId as unique key & SHA-256 password hash
   const signUp = async (studentIdRaw: string, nameRaw: string, emailRaw: string, pass: string) => {
-    setLoading(true);
     const studentId = studentIdRaw.trim();
     const name = nameRaw.trim();
     const email = emailRaw.trim();
 
     if (!studentId || !name || !pass) {
-      setLoading(false);
       throw new Error('请完整填入学号、姓名和密码');
     }
 
     if (pass.length < 6) {
-      setLoading(false);
       throw new Error('为保障账号安全，密码长度至少需要 6 位字符');
     }
 
@@ -281,8 +278,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error: any) {
       console.error('Sign up error:', error);
       throw error;
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -291,10 +286,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Sign in student by checking studentId and verifying hashed password in Firestore
   const signIn = async (accountRaw: string, pass: string) => {
-    setLoading(true);
     const account = accountRaw.trim();
     if (!account || !pass) {
-      setLoading(false);
       throw new Error('请输入学号以及对应密码');
     }
 
@@ -370,8 +363,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error: any) {
       console.error('Sign in error:', error);
       throw error;
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -380,10 +371,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Send password reset email
   const sendPasswordReset = async (accountRaw: string): Promise<{ email: string; name?: string }> => {
-    setLoading(true);
     const account = accountRaw.trim();
     if (!account) {
-      setLoading(false);
       throw new Error('请输入您注册时的学号或绑定邮箱');
     }
 
@@ -410,8 +399,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error('邮箱格式不正确，请重新输入。');
       }
       throw error;
-    } finally {
-      setLoading(false);
     }
   };
 

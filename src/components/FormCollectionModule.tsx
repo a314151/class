@@ -52,13 +52,9 @@ export const FormCollectionModule: React.FC = () => {
   useEffect(() => {
     const unsub = subscribeToForms((data) => {
       setForms(data);
-      if (data.length > 0) {
-        if (!activeForm || !data.some(f => f.id === activeForm.id)) {
-          setActiveForm(data[0]);
-        }
-      } else {
-        setActiveForm(null);
-      }
+      setActiveForm((current) =>
+        (current && data.find((form) => form.id === current.id)) || data[0] || null
+      );
     });
     return () => unsub();
   }, []);
@@ -171,6 +167,7 @@ export const FormCollectionModule: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const hasSubmittedActive = Boolean(activeForm && profile && activeForm.submissions && activeForm.submissions[profile.uid]);
