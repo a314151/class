@@ -2,15 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { 
   UserProfile, 
   ClassSettings, 
-  UserRole 
+  UserRole,
+  DirectMessage
 } from '../types';
 import { 
   subscribeToUsers, 
   updateUserRole, 
   subscribeToSettings, 
   saveSettings,
-  cleanupDuplicateUsers,
-  deleteUserDoc
+  setUserAccessDisabled,
+  approveUserAccess,
+  subscribeToAdminDirectMessages
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
 import { ConfirmModal } from './ConfirmModal';
@@ -24,12 +26,11 @@ import {
   Edit, 
   Search,
   Lock,
-  Key,
-  ShieldAlert,
-  AlertTriangle,
   Crown,
   Trash2,
-  RefreshCw
+  UserPlus,
+  MessagesSquare,
+  UserCheck
 } from 'lucide-react';
 
 const ROLE_NAMES: Record<UserRole, string> = {
@@ -39,35 +40,40 @@ const ROLE_NAMES: Record<UserRole, string> = {
 };
 
 export const SettingsModule: React.FC = () => {
-  const { profile, isSuperAdmin, claimSuperAdmin } = useAuth();
+  const { profile, isSuperAdmin, createManagedMember } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [directMessages, setDirectMessages] = useState<DirectMessage[]>([]);
   const [searchUser, setSearchUser] = useState('');
   const [settings, setSettings] = useState<ClassSettings>({
-    className: '高三 (1) 班 · 卓越空间',
-    motto: '博学笃行，求是拓新，追光而行',
-    semester: '2026年 春季学期',
-    announcement: '欢迎进入班级空间！期中模拟考与研学报名正在进行中。',
-    cloudflareWorkerUrl: 'https://class-space-worker.pages.dev/api/upload',
-    r2BucketName: 'class-space-assets'
+    className: '班级空间',
+    motto: '',
+    semester: '',
+    announcement: ''
   });
   const [copied, setCopied] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [cleaning, setCleaning] = useState(false);
-  const [cleanNotice, setCleanNotice] = useState<string | null>(null);
   const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
-
-  // Admin authentication input for non-admin view
-  const [adminKey, setAdminKey] = useState('');
-  const [adminKeyError, setAdminKeyError] = useState<string | null>(null);
+  const [newMember, setNewMember] = useState({
+    studentId: '',
+    name: '',
+    email: '',
+    password: '',
+    role: 'member' as Exclude<UserRole, 'super_admin'>
+  });
+  const [creatingMember, setCreatingMember] = useState(false);
+  const [memberNotice, setMemberNotice] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!isSuperAdmin) return;
     const unsubUsers = subscribeToUsers((data) => setUsers(data));
     const unsubSettings = subscribeToSettings((data) => setSettings(data));
+    const unsubDirectMessages = subscribeToAdminDirectMessages((data) => setDirectMessages(data));
     return () => {
       unsubUsers();
       unsubSettings();
+      unsubDirectMessages();
     };
-  }, []);
+  }, [isSuperAdmin]);
 
   const handleRoleChange = async (targetUid: string, newRole: UserRole) => {
     if (!isSuperAdmin) {
@@ -97,16 +103,18 @@ export const SettingsModule: React.FC = () => {
     }
   };
 
-  const handleUnlockAdmin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdminKeyError(null);
-    if (!adminKey.trim()) {
-      setAdminKeyError('请输入管理口令');
-      return;
-    }
-    const success = await claimSuperAdmin(adminKey.trim());
-    if (!success) {
-      setAdminKeyError('授权口令错误，请核实后重试');
+  const handleCreateMember = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setCreatingMember(true);
+    setMemberNotice(null);
+    try {
+      const created = await createManagedMember(newMember);
+      setMemberNotice(`已开通 ${created.name}（${created.studentId}）的访问权限`);
+      setNewMember({ studentId: '', name: '', email: '', password: '', role: 'member' });
+    } catch (error) {
+      setMemberNotice(error instanceof Error ? error.message : '创建成员失败，请重试');
+    } finally {
+      setCreatingMember(false);
     }
   };
 
@@ -158,24 +166,14 @@ export default {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleCleanDuplicates = async () => {
-    setCleaning(true);
-    setCleanNotice(null);
-    try {
-      const count = await cleanupDuplicateUsers();
-      setCleanNotice(count > 0 ? `已成功清理 ${count} 个重复账号与冗余数据` : '数据正常，未发现多余的重复账号');
-      setTimeout(() => setCleanNotice(null), 3000);
-    } catch (e) {
-      console.error('Clean error:', e);
-      setCleanNotice('清理失败，请重试');
-    } finally {
-      setCleaning(false);
-    }
-  };
-
   const handleDeleteUser = async (u: UserProfile) => {
     try {
-      await deleteUserDoc(u.uid);
+      const documentId = u.profileDocId || u.uid;
+      if (u.approved !== true) {
+        await approveUserAccess(documentId);
+      } else {
+        await setUserAccessDisabled(documentId, !u.disabled);
+      }
       setUserToDelete(null);
     } catch (e) {
       console.error('Delete user error:', e);
@@ -207,36 +205,9 @@ export default {
             </p>
           </div>
 
-          <form onSubmit={handleUnlockAdmin} className="space-y-3 pt-2 text-left">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                请输入超级管理员授权口令解锁：
-              </label>
-              <div className="relative">
-                <Key className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                <input
-                  type="password"
-                  placeholder="输入管理口令"
-                  value={adminKey}
-                  onChange={(e) => setAdminKey(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 text-slate-900 dark:text-slate-100"
-                />
-              </div>
-              {adminKeyError && (
-                <p className="text-xs text-rose-600 dark:text-rose-400 font-bold mt-1.5 flex items-center gap-1">
-                  <AlertTriangle className="w-3.5 h-3.5" />
-                  {adminKeyError}
-                </p>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 px-4 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl shadow-lg shadow-indigo-600/30 border border-white/20 transition-all active:scale-95"
-            >
-              验证口令并进入管理后台
-            </button>
-          </form>
+          <p className="rounded-2xl bg-slate-100 px-4 py-3 text-xs text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            管理权限只认已验证的管理员 Google 账号，已移除本地口令解锁入口。
+          </p>
         </div>
       </div>
     );
@@ -263,6 +234,71 @@ export default {
         </div>
       </div>
 
+      {/* Create managed member */}
+      <div className="p-6 rounded-3xl bg-white/40 dark:bg-slate-900/50 backdrop-blur-xl border border-white/50 dark:border-white/10 shadow-xl shadow-indigo-950/5 space-y-4">
+        <div>
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <UserPlus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            开通成员账号
+          </h3>
+          <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+            账号只能由你创建。把学号和初始密码私下交给同学，网页不再开放自助注册。
+          </p>
+        </div>
+        <form onSubmit={handleCreateMember} className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <input
+            required
+            value={newMember.studentId}
+            onChange={(e) => setNewMember({ ...newMember, studentId: e.target.value })}
+            placeholder="学号 *"
+            className="px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800"
+          />
+          <input
+            required
+            value={newMember.name}
+            onChange={(e) => setNewMember({ ...newMember, name: e.target.value })}
+            placeholder="姓名 *"
+            className="px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800"
+          />
+          <input
+            type="email"
+            value={newMember.email}
+            onChange={(e) => setNewMember({ ...newMember, email: e.target.value })}
+            placeholder="联系邮箱（可选，仅作资料）"
+            className="px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800"
+          />
+          <input
+            required
+            minLength={8}
+            type="password"
+            value={newMember.password}
+            onChange={(e) => setNewMember({ ...newMember, password: e.target.value })}
+            placeholder="初始密码（至少 8 位）*"
+            className="px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800"
+          />
+          <select
+            value={newMember.role}
+            onChange={(e) => setNewMember({ ...newMember, role: e.target.value as Exclude<UserRole, 'super_admin'> })}
+            className="px-3.5 py-2.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-800"
+          >
+            <option value="member">普通成员</option>
+            <option value="committee">班委会委员</option>
+          </select>
+          <button
+            type="submit"
+            disabled={creatingMember}
+            className="rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-60"
+          >
+            {creatingMember ? '正在创建...' : '创建并批准访问'}
+          </button>
+        </form>
+        {memberNotice && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-semibold text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-300">
+            {memberNotice}
+          </div>
+        )}
+      </div>
+
       {/* Section 1: Member Permissions & Roles Table */}
       <div className="p-6 rounded-3xl bg-white/40 dark:bg-slate-900/50 backdrop-blur-xl border border-white/50 dark:border-white/10 shadow-xl shadow-indigo-950/5 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-white/40 dark:border-white/10">
@@ -276,17 +312,8 @@ export default {
             </p>
           </div>
 
-          {/* Search bar & Deduplication */}
+          {/* Search bar */}
           <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              onClick={handleCleanDuplicates}
-              disabled={cleaning}
-              title="自动清理重复账号与冗余数据"
-              className="px-3 py-1.5 text-xs font-bold rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 shrink-0 transition-all active:scale-95"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${cleaning ? 'animate-spin' : ''}`} />
-              {cleaning ? '正在排重...' : '一键排重清洗'}
-            </button>
             <div className="relative w-full sm:w-60">
               <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
               <input
@@ -299,13 +326,6 @@ export default {
             </div>
           </div>
         </div>
-
-        {cleanNotice && (
-          <div className="p-3 bg-indigo-500/20 border border-indigo-400/40 rounded-2xl text-xs text-indigo-900 dark:text-indigo-200 font-semibold flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
-            {cleanNotice}
-          </div>
-        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -342,6 +362,9 @@ export default {
                         <span className="text-[10px] text-slate-500 font-mono">
                           {user.email}
                         </span>
+                        <span className="text-[9px] text-slate-400 font-mono block" title="Firebase Auth UID">
+                          UID: {user.authUid || user.uid}
+                        </span>
                       </div>
                     </td>
                     <td className="p-3 font-mono text-slate-600 dark:text-slate-400">
@@ -352,42 +375,101 @@ export default {
                     </td>
                     <td className="p-3">
                       <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                        user.role === 'super_admin'
+                        !user.authUid
+                          ? 'bg-slate-500/20 text-slate-700 dark:text-slate-300 border-slate-400/30'
+                          : user.approved !== true
+                          ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-400/30'
+                          : user.disabled
+                          ? 'bg-slate-500/20 text-slate-700 dark:text-slate-300 border-slate-400/30'
+                          : user.role === 'super_admin'
                           ? 'bg-rose-500/20 text-rose-900 dark:text-rose-300 border-rose-400/30'
                           : user.role === 'committee'
                             ? 'bg-amber-500/20 text-amber-900 dark:text-amber-300 border-amber-400/30'
                             : 'bg-white/70 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300 border-white/40 dark:border-white/10'
                       }`}>
-                        {ROLE_NAMES[user.role]}
+                        {!user.authUid ? '未绑定登录账号' : user.approved !== true ? '待管理员批准' : user.disabled ? '已撤销访问' : ROLE_NAMES[user.role]}
                       </span>
                     </td>
                     <td className="p-3">
                       <select
                         value={user.role}
-                        onChange={(e) => handleRoleChange(user.uid, e.target.value as UserRole)}
+                        onChange={(e) => handleRoleChange(user.profileDocId || user.uid, e.target.value as UserRole)}
+                        disabled={user.role === 'super_admin' || user.disabled || user.approved !== true}
                         className="px-3 py-1.5 text-xs rounded-xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 font-medium"
                       >
-                        <option value="super_admin">👑 超级管理员</option>
+                        {user.role === 'super_admin' && <option value="super_admin">👑 超级管理员</option>}
                         <option value="committee">⭐ 班委会委员</option>
                         <option value="member">👤 普通成员</option>
                       </select>
                     </td>
                     <td className="p-3 text-right">
-                      {user.role !== 'super_admin' && (
+                      {user.role !== 'super_admin' && user.authUid ? (
                         <button
                           onClick={() => setUserToDelete(user)}
-                          title="从班级空间移除该账号"
-                          className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                          title={user.approved !== true ? '批准该账号访问' : user.disabled ? '恢复该账号访问' : '撤销该账号访问'}
+                          className={`p-1.5 rounded-lg transition-colors ${user.approved !== true || user.disabled ? 'text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40' : 'text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40'}`}
                         >
-                          <Trash2 className="w-4 h-4" />
+                          {user.approved !== true || user.disabled ? <UserCheck className="w-4 h-4" /> : <Trash2 className="w-4 h-4" />}
                         </button>
-                      )}
+                      ) : user.role !== 'super_admin' ? (
+                        <span className="text-[10px] text-slate-400" title="请使用上方“开通成员账号”重新创建登录账号">
+                          需开通账号
+                        </span>
+                      ) : null}
                     </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Admin-only complete direct-message audit */}
+      <div className="p-6 rounded-3xl bg-white/40 dark:bg-slate-900/50 backdrop-blur-xl border border-white/50 dark:border-white/10 shadow-xl shadow-indigo-950/5 space-y-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <MessagesSquare className="w-4 h-4 text-violet-600 dark:text-violet-400" />
+              管理员数据调试 · 全部私聊
+            </h3>
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
+              仅你的管理员账号可读取。普通成员只能读取自己参与的私聊；这里显示最近 200 条用于排错。
+            </p>
+          </div>
+          <span className="shrink-0 rounded-full bg-violet-500/15 px-2.5 py-1 text-[10px] font-bold text-violet-700 dark:text-violet-300">
+            {directMessages.length} 条
+          </span>
+        </div>
+        <div className="max-h-80 overflow-auto rounded-2xl border border-slate-200/70 dark:border-slate-700">
+          {directMessages.length === 0 ? (
+            <p className="p-6 text-center text-xs text-slate-500">暂无私聊记录</p>
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                <tr>
+                  <th className="p-2.5">时间</th>
+                  <th className="p-2.5">发送者 → 接收者</th>
+                  <th className="p-2.5">内容</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
+                {directMessages.map((message) => (
+                  <tr key={message.id} className="align-top">
+                    <td className="p-2.5 whitespace-nowrap text-[10px] text-slate-500">
+                      {new Date(message.createdAt).toLocaleString('zh-CN')}
+                    </td>
+                    <td className="p-2.5 font-mono text-[10px] text-slate-500">
+                      {message.senderName || message.senderUid} → {message.recipientUid}
+                    </td>
+                    <td className="p-2.5 text-slate-700 dark:text-slate-200 break-words max-w-sm">
+                      {message.content || (message.attachmentUrl ? '[附件]' : '[空消息]')}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
 
@@ -552,9 +634,13 @@ export default {
       {/* Confirm Delete User Account Modal */}
       <ConfirmModal
         isOpen={Boolean(userToDelete)}
-        title="确认从班级空间移除该成员账号？"
-        message={`确定要将 ${userToDelete?.name} (学号: ${userToDelete?.studentId || '无'}) 从班级空间花名册中彻底移除吗？此操作不可逆。`}
-        confirmText="确认移除"
+        title={userToDelete?.approved !== true ? '批准该成员访问？' : userToDelete?.disabled ? '恢复该成员访问？' : '撤销该成员访问？'}
+        message={userToDelete?.approved !== true
+          ? `确认批准 ${userToDelete?.name}（学号：${userToDelete?.studentId || '无'}）访问班级空间？请先核对姓名、学号和 Auth UID。`
+          : userToDelete?.disabled
+          ? `恢复 ${userToDelete?.name}（学号：${userToDelete?.studentId || '无'}）的班级空间访问权限？`
+          : `撤销 ${userToDelete?.name}（学号：${userToDelete?.studentId || '无'}）的访问权限？账号资料会保留在管理员后台，之后可以恢复。`}
+        confirmText={userToDelete?.approved !== true ? '确认批准' : userToDelete?.disabled ? '确认恢复' : '确认撤销'}
         onConfirm={async () => {
           if (userToDelete) {
             await handleDeleteUser(userToDelete);

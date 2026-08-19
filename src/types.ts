@@ -12,6 +12,9 @@ export interface UserProfile {
   phone?: string;
   bio?: string;
   passwordHash?: string;
+  approved?: boolean;
+  disabled?: boolean;
+  profileDocId?: string;
   createdAt: string;
 }
 
@@ -75,6 +78,7 @@ export interface DirectMessage {
   conversationId: string; // sorted uids: uid1_uid2
   senderUid: string;
   recipientUid: string;
+  participantUids?: string[];
   senderName: string;
   senderAvatar: string;
   content: string;

@@ -7,13 +7,9 @@ import {
   Hash, 
   Phone, 
   FileText, 
-  Key, 
   CheckCircle2, 
-  AlertCircle, 
   RefreshCw, 
-  Camera, 
-  Crown,
-  X
+  Camera
 } from 'lucide-react';
 
 const PRESET_AVATARS = [
@@ -28,7 +24,7 @@ const PRESET_AVATARS = [
 ];
 
 export const ProfileModule: React.FC = () => {
-  const { profile, isSuperAdmin, isCommittee, updateMyProfile, claimSuperAdmin } = useAuth();
+  const { profile, isSuperAdmin, isCommittee, updateMyProfile } = useAuth();
 
   const [name, setName] = useState(profile?.name || '');
   const [studentId, setStudentId] = useState(profile?.studentId || '');
@@ -39,12 +35,6 @@ export const ProfileModule: React.FC = () => {
 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
-
-  // Minimal Modal for Super Admin Secret Command Input
-  const [showAdminModal, setShowAdminModal] = useState(false);
-  const [adminCommand, setAdminCommand] = useState('');
-  const [adminError, setAdminError] = useState<string | null>(null);
-  const [adminSuccess, setAdminSuccess] = useState(false);
 
   useEffect(() => {
     if (profile) {
@@ -67,7 +57,6 @@ export const ProfileModule: React.FC = () => {
     try {
       await updateMyProfile({
         name: name.trim(),
-        studentId: studentId.trim(),
         birthday,
         phone: phone.trim(),
         bio: bio.trim(),
@@ -85,35 +74,6 @@ export const ProfileModule: React.FC = () => {
   const handleRandomAvatar = () => {
     const randomSeed = Math.random().toString(36).substring(2, 9);
     setAvatar(`https://api.dicebear.com/7.x/bottts/svg?seed=${randomSeed}`);
-  };
-
-  const handleClaimAdminSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdminError(null);
-    setAdminSuccess(false);
-
-    const cmd = adminCommand.trim();
-    if (!cmd) {
-      setAdminError('请输入指令');
-      return;
-    }
-
-    try {
-      const success = await claimSuperAdmin(cmd);
-      if (success) {
-        setAdminSuccess(true);
-        setAdminCommand('');
-        setTimeout(() => {
-          setShowAdminModal(false);
-          setAdminSuccess(false);
-        }, 800);
-      } else {
-        setAdminError('指令不正确，请重新输入');
-      }
-    } catch (err) {
-      console.error('Submit command error:', err);
-      setAdminError('认证出错，请重试');
-    }
   };
 
   // Birthday calculation
@@ -160,21 +120,6 @@ export const ProfileModule: React.FC = () => {
             {isSuperAdmin ? '👑 超级管理员' : isCommittee ? '⭐ 班委' : '👤 普通成员'}
           </span>
 
-          {/* Clean minimal button for Super Admin Command */}
-          {!isSuperAdmin && (
-            <button
-              type="button"
-              onClick={() => {
-                setShowAdminModal(true);
-                setAdminError(null);
-                setAdminSuccess(false);
-              }}
-              className="p-1.5 rounded-2xl bg-white/40 hover:bg-white/70 dark:bg-white/10 dark:hover:bg-white/20 border border-white/50 dark:border-white/15 text-slate-600 hover:text-slate-900 dark:text-slate-300 transition-all shadow-xs"
-              title="口令认证"
-            >
-              <Key className="w-4 h-4" />
-            </button>
-          )}
         </div>
       </div>
 
@@ -294,10 +239,11 @@ export const ProfileModule: React.FC = () => {
                     type="text"
                     required
                     value={studentId}
-                    onChange={(e) => setStudentId(e.target.value)}
-                    placeholder="例如：20260108"
-                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 font-mono focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                    readOnly
+                    title="学号由管理员创建账号时绑定，成员不能自行修改"
+                    className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-slate-100/80 dark:bg-slate-900/70 text-slate-500 dark:text-slate-400 font-mono cursor-not-allowed"
                   />
+                  <p className="mt-1 text-[10px] text-slate-500">学号由管理员绑定，不能自行修改。</p>
                 </div>
               </div>
 
@@ -379,55 +325,6 @@ export const ProfileModule: React.FC = () => {
         </div>
       </div>
 
-      {/* Secret Command Dialog */}
-      {showAdminModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 border border-white/30 dark:border-white/10 rounded-3xl p-6 w-full max-w-xs shadow-2xl space-y-4">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                <Key className="w-3.5 h-3.5 text-indigo-500" />
-                口令认证
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowAdminModal(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleClaimAdminSubmit} className="space-y-3">
-              <input
-                type="password"
-                autoFocus
-                placeholder="输入口令指令"
-                value={adminCommand}
-                onChange={(e) => setAdminCommand(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-              />
-
-              {adminError && (
-                <p className="text-[11px] text-rose-500 font-bold">{adminError}</p>
-              )}
-
-              {adminSuccess && (
-                <p className="text-[11px] text-emerald-500 font-bold flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  已进入超级管理员！
-                </p>
-              )}
-
-              <button
-                type="submit"
-                className="w-full py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-md shadow-indigo-600/30"
-              >
-                确定
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

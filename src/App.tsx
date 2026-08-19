@@ -5,7 +5,7 @@ import { Sidebar, BASE_NAV_ITEMS, ADMIN_NAV_ITEM } from './components/Sidebar';
 import { NoticeModule } from './components/NoticeModule';
 import { ClassSettings } from './types';
 import { subscribeToSettings } from './services/firestoreService';
-import { X, User, Crown } from 'lucide-react';
+import { X, User, Crown, LockKeyhole, LogIn } from 'lucide-react';
 
 const BirthdayModule = lazy(() => import('./components/BirthdayModule').then((module) => ({ default: module.BirthdayModule })));
 const CalendarModule = lazy(() => import('./components/CalendarModule').then((module) => ({ default: module.CalendarModule })));
@@ -24,31 +24,66 @@ const ModuleFallback = () => (
 );
 
 function MainAppContent() {
-  const { profile, loading, isSuperAdmin } = useAuth();
+  const { currentUser, profile, loading, accessError, isSuperAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState('notice');
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<'login' | 'register' | 'profile'>('login');
   const [dismissAnnouncement, setDismissAnnouncement] = useState(false);
 
   const [settings, setSettings] = useState<ClassSettings>({
-    className: '高三 (1) 班 · 卓越空间',
-    motto: '博学笃行，求是拓新，追光而行',
-    semester: '2026年 春季学期',
-    announcement: '欢迎进入班级空间！期中模拟考与研学报名正在进行中，请及时查看通知与提交表格。',
-    cloudflareWorkerUrl: 'https://class-space-worker.pages.dev/api/upload',
-    r2BucketName: 'class-space-assets'
+    className: '班级空间',
+    motto: '',
+    semester: '',
+    announcement: ''
   });
 
   useEffect(() => {
+    if (!currentUser || !profile) return;
     const unsub = subscribeToSettings((data) => setSettings(data));
     return () => unsub();
-  }, []);
+  }, [currentUser, profile]);
 
   if (loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 gap-3">
         <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-semibold">正在同步班级空间数据...</p>
+        <p className="text-xs font-semibold">正在验证访问权限...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser || !profile) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center px-5 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(79,70,229,0.24),_transparent_48%)]" />
+        <div className="relative w-full max-w-md rounded-3xl border border-white/10 bg-white/[0.06] p-7 sm:p-9 shadow-2xl backdrop-blur-xl text-center">
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-indigo-500/15 ring-1 ring-indigo-300/25">
+            <LockKeyhole className="h-8 w-8 text-indigo-300" />
+          </div>
+          <p className="text-xs font-bold tracking-[0.28em] text-indigo-300">PRIVATE SPACE</p>
+          <h1 className="mt-3 text-2xl font-black">私人班级空间</h1>
+          <p className="mt-3 text-sm leading-6 text-slate-300">
+            仅限管理员已开通的班级成员访问。未登录状态不会加载或显示任何班级数据。
+          </p>
+          {accessError && (
+            <div className="mt-5 rounded-xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
+              {accessError}
+            </div>
+          )}
+          <button
+            onClick={() => setShowAuthModal(true)}
+            className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-500 px-5 py-3 text-sm font-bold shadow-lg shadow-indigo-950/40 transition hover:bg-indigo-400"
+          >
+            <LogIn className="h-4 w-4" />
+            验证身份并进入
+          </button>
+          <p className="mt-4 text-xs text-slate-500">没有账号请联系管理员，不提供公开注册。</p>
+        </div>
+
+        {showAuthModal && (
+          <Suspense fallback={null}>
+            <AuthModal isOpen onClose={() => setShowAuthModal(false)} />
+          </Suspense>
+        )}
       </div>
     );
   }
@@ -70,7 +105,6 @@ function MainAppContent() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onOpenAuth={() => {
-          setAuthModalMode('login');
           setShowAuthModal(true);
         }}
         onOpenProfile={() => {
@@ -189,7 +223,6 @@ function MainAppContent() {
         <Suspense fallback={null}>
           <AuthModal
             isOpen={showAuthModal}
-            initialMode={authModalMode}
             onClose={() => setShowAuthModal(false)}
           />
         </Suspense>
