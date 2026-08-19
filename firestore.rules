@@ -105,7 +105,8 @@ service cloud.firestore {
       allow get: if isOwnerAdmin()
         || (signedIn() && userId == request.auth.uid)
         || (signedIn() && resource.data.authUid == request.auth.uid);
-      allow list: if isMember()
+      allow list: if isOwnerAdmin()
+        || (hasMemberProfile() && resource.data.approved == true)
         || (signedIn() && resource.data.authUid == request.auth.uid);
 
       allow create: if (isOwnerAdmin()

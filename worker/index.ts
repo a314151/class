@@ -573,7 +573,16 @@ const fetchProfileByToken = async (
   }
   if (requireApproved && profile.approved !== true) {
     if (profile.disabled === true) {
-      throw new HttpError(403, '注册申请未通过，请联系管理员核对姓名和学号', 'REGISTRATION_REJECTED');
+      const rejectionReason = typeof profile.rejectionReason === 'string'
+        ? profile.rejectionReason.trim()
+        : '';
+      throw new HttpError(
+        403,
+        rejectionReason
+          ? `注册申请未通过。管理员回复：${rejectionReason}`
+          : '注册申请未通过，请联系管理员核对姓名和学号',
+        'REGISTRATION_REJECTED'
+      );
     }
     throw new HttpError(403, '注册申请正在等待管理员审批，批准后即可登录', 'PENDING_APPROVAL');
   }

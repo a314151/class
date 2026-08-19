@@ -12,10 +12,12 @@ import {
   saveSettings,
   setUserAccessDisabled,
   approveUserAccess,
+  rejectUserAccess,
   subscribeToAdminDirectMessages
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
 import { ConfirmModal } from './ConfirmModal';
+import { RejectApplicationModal } from './RejectApplicationModal';
 import { 
   ShieldCheck, 
   Users, 
@@ -65,10 +67,11 @@ export const SettingsModule: React.FC = () => {
   const [creatingMember, setCreatingMember] = useState(false);
   const [memberNotice, setMemberNotice] = useState<string | null>(null);
   const [processingApplicationUid, setProcessingApplicationUid] = useState<string | null>(null);
+  const [applicationToReject, setApplicationToReject] = useState<UserProfile | null>(null);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
-    const unsubUsers = subscribeToUsers((data) => setUsers(data));
+    const unsubUsers = subscribeToUsers((data) => setUsers(data), true);
     const unsubSettings = subscribeToSettings((data) => setSettings(data));
     const unsubDirectMessages = subscribeToAdminDirectMessages((data) => setDirectMessages(data));
     return () => {
@@ -183,20 +186,32 @@ export default {
     }
   };
 
-  const handleApplicationDecision = async (user: UserProfile, approve: boolean) => {
+  const handleApproveApplication = async (user: UserProfile) => {
     const documentId = user.profileDocId || user.uid;
     setProcessingApplicationUid(documentId);
     setMemberNotice(null);
     try {
-      if (approve) {
-        await approveUserAccess(documentId);
-        setMemberNotice(`已批准 ${user.name}（${user.studentId}）加入班级空间`);
-      } else {
-        await setUserAccessDisabled(documentId, true);
-        setMemberNotice(`已拒绝 ${user.name}（${user.studentId}）的申请，之后仍可在成员列表中重新批准`);
-      }
+      await approveUserAccess(documentId);
+      setMemberNotice(`已批准 ${user.name}（${user.studentId}）加入班级空间`);
     } catch (error) {
       setMemberNotice(error instanceof Error ? error.message : '处理注册申请失败');
+    } finally {
+      setProcessingApplicationUid(null);
+    }
+  };
+
+  const handleRejectApplication = async (user: UserProfile, reason: string) => {
+    const documentId = user.profileDocId || user.uid;
+    setProcessingApplicationUid(documentId);
+    setMemberNotice(null);
+    try {
+      await rejectUserAccess(documentId, reason);
+      setMemberNotice(`已拒绝 ${user.name}（${user.studentId}）的申请，并向申请人回复原因`);
+      setApplicationToReject(null);
+    } catch (error) {
+      const normalizedError = error instanceof Error ? error : new Error('处理注册申请失败');
+      setMemberNotice(normalizedError.message);
+      throw normalizedError;
     } finally {
       setProcessingApplicationUid(null);
     }
@@ -309,7 +324,7 @@ export default {
                     <button
                       type="button"
                       disabled={isProcessing}
-                      onClick={() => void handleApplicationDecision(user, true)}
+                      onClick={() => void handleApproveApplication(user)}
                       className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
                     >
                       <UserCheck className="h-4 w-4" />
@@ -318,7 +333,7 @@ export default {
                     <button
                       type="button"
                       disabled={isProcessing}
-                      onClick={() => void handleApplicationDecision(user, false)}
+                      onClick={() => setApplicationToReject(user)}
                       className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-300 dark:hover:bg-rose-950/30"
                     >
                       <UserX className="h-4 w-4" />
@@ -484,6 +499,11 @@ export default {
                       }`}>
                         {!user.authUid ? '未绑定登录账号' : user.approved !== true && user.disabled ? '已拒绝（可重新批准）' : user.approved !== true ? '待管理员批准' : user.disabled ? '已撤销访问' : ROLE_NAMES[user.role]}
                       </span>
+                      {user.approved !== true && user.disabled && user.rejectionReason ? (
+                        <p className="mt-1 max-w-64 text-[10px] leading-relaxed text-rose-600 dark:text-rose-300" title={user.rejectionReason}>
+                          原因：{user.rejectionReason}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="p-3">
                       <select
@@ -743,6 +763,13 @@ export default {
         }}
         onClose={() => setUserToDelete(null)}
       />
+      {applicationToReject ? (
+        <RejectApplicationModal
+          applicant={applicationToReject}
+          onConfirm={(reason) => handleRejectApplication(applicationToReject, reason)}
+          onClose={() => setApplicationToReject(null)}
+        />
+      ) : null}
     </div>
   );
 };
