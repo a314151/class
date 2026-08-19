@@ -63,6 +63,42 @@ service cloud.firestore {
         && (legacyRawProfileMatches() || legacyPrefixedProfileMatches());
     }
 
+    // A newly registered student may create only their own locked, pending
+    // profile. Approval, role changes and all class data remain admin-only.
+    function validPublicRegistration(userId) {
+      return signedIn()
+        && userId == request.auth.uid
+        && request.auth.token.firebase.sign_in_provider == 'password'
+        && request.resource.data.keys().hasAll([
+          'uid', 'authUid', 'name', 'email', 'studentId', 'role',
+          'approved', 'disabled', 'avatar', 'bio', 'createdAt'
+        ])
+        && request.resource.data.keys().hasOnly([
+          'uid', 'authUid', 'name', 'email', 'studentId', 'role',
+          'approved', 'disabled', 'avatar', 'bio', 'createdAt'
+        ])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.role == 'member'
+        && request.resource.data.approved == false
+        && request.resource.data.disabled == false
+        && request.resource.data.name is string
+        && request.resource.data.name.size() >= 1
+        && request.resource.data.name.size() <= 40
+        && request.resource.data.studentId is string
+        && request.resource.data.studentId.size() >= 2
+        && request.resource.data.studentId.size() <= 32
+        && request.auth.token.email == 'stu_' + request.resource.data.studentId + '@class.student.internal'
+        && request.resource.data.email is string
+        && request.resource.data.email.size() <= 120
+        && request.resource.data.avatar is string
+        && request.resource.data.avatar.size() <= 500
+        && request.resource.data.bio == '等待管理员审批'
+        && request.resource.data.createdAt is string
+        && request.resource.data.createdAt.size() <= 50
+        && !request.resource.data.keys().hasAny(['password', 'passwordHash']);
+    }
+
     match /users/{userId} {
       // Before a legacy profile is migrated, an authenticated user may query
       // only the profile already linked to their Firebase Auth UID.
@@ -74,6 +110,7 @@ service cloud.firestore {
 
       allow create: if (isOwnerAdmin()
           && (request.resource.data.role != 'super_admin' || userId == request.auth.uid))
+        || validPublicRegistration(userId)
         || validSelfMigration(userId);
       allow update: if (isOwnerAdmin()
           && (request.resource.data.role != 'super_admin' || userId == request.auth.uid))

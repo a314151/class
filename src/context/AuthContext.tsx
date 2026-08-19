@@ -1,8 +1,10 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import {
   auth,
+  createUserWithEmailAndPassword,
   createManagedAuthUser,
+  deleteUser,
   googleProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
@@ -21,6 +23,13 @@ interface ManagedMemberInput {
   role: Exclude<UserRole, 'super_admin'>;
 }
 
+interface MemberRegistrationInput {
+  studentId: string;
+  name: string;
+  email?: string;
+  password: string;
+}
+
 interface AuthContextType {
   currentUser: User | null;
   profile: UserProfile | null;
@@ -31,6 +40,7 @@ interface AuthContextType {
   isMember: boolean;
   loginWithGoogle: () => Promise<void>;
   loginWithStudentIdOrEmail: (account: string, password: string) => Promise<void>;
+  registerMember: (input: MemberRegistrationInput) => Promise<void>;
   createManagedMember: (input: ManagedMemberInput) => Promise<UserProfile>;
   updateMyProfile: (data: Partial<UserProfile>) => Promise<void>;
   logout: () => Promise<void>;
@@ -100,6 +110,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const registrationInProgressRef = useRef(false);
 
   const loadAuthorizedProfile = useCallback(async (user: User): Promise<UserProfile> => {
     if (user.isAnonymous) {
@@ -131,8 +142,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const existing = await getUserProfile(user.uid);
-    if (!existing || existing.authUid !== user.uid || existing.approved !== true || existing.disabled) {
-      throw new Error('此账号尚未获得管理员批准，或访问权限已被撤销');
+    if (!existing || existing.authUid !== user.uid) {
+      throw new Error('找不到与此登录账号匹配的注册申请');
+    }
+    if (existing.approved !== true && existing.disabled) {
+      throw new Error('注册申请未通过，请联系管理员核对姓名和学号');
+    }
+    if (existing.approved !== true) {
+      throw new Error('注册申请正在等待管理员审批，批准后即可登录');
+    }
+    if (existing.disabled) {
+      throw new Error('此账号的班级访问权限已被管理员撤销');
     }
 
     const canonical = removeLegacySecrets({
@@ -190,6 +210,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!active) return;
       window.clearTimeout(bootTimeoutId);
       const revision = ++authRevision;
+
+      if (user && registrationInProgressRef.current) {
+        setCurrentUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
 
       if (!user) {
         setCurrentUser(null);
@@ -262,6 +289,62 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       password
     );
     await finishLogin(result.user);
+  };
+
+  const registerMember = async (input: MemberRegistrationInput): Promise<void> => {
+    const studentId = input.studentId.trim().toLowerCase();
+    const name = input.name.trim();
+    const email = input.email?.trim().toLowerCase() || '';
+
+    if (!/^[a-z0-9_-]{2,32}$/.test(studentId)) {
+      throw new Error('学号需为 2-32 位字母、数字、下划线或短横线');
+    }
+    if (!name || name.length > 40) {
+      throw new Error('请输入 1-40 个字的真实姓名');
+    }
+    if (input.password.length < 8) {
+      throw new Error('密码至少需要 8 位');
+    }
+
+    registrationInProgressRef.current = true;
+    setAccessError(null);
+    let createdUser: User | null = null;
+
+    try {
+      const credential = await createUserWithEmailAndPassword(
+        auth,
+        getStudentAuthEmail(studentId),
+        input.password
+      );
+      createdUser = credential.user;
+      await saveUserProfile({
+        uid: createdUser.uid,
+        authUid: createdUser.uid,
+        name,
+        email,
+        studentId,
+        role: 'member',
+        approved: false,
+        disabled: false,
+        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=applicant_${encodeURIComponent(studentId)}`,
+        bio: '等待管理员审批',
+        createdAt: new Date().toISOString()
+      });
+    } catch (error) {
+      if (createdUser) {
+        await deleteUser(createdUser).catch(async () => {
+          await signOut(auth).catch(() => undefined);
+        });
+      }
+      throw error;
+    } finally {
+      registrationInProgressRef.current = false;
+    }
+
+    await signOut(auth).catch(() => undefined);
+    setCurrentUser(null);
+    setProfile(null);
+    setLoading(false);
   };
 
   const createManagedMember = async (input: ManagedMemberInput): Promise<UserProfile> => {
@@ -340,6 +423,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     isMember: Boolean(currentUser && profile),
     loginWithGoogle,
     loginWithStudentIdOrEmail,
+    registerMember,
     createManagedMember,
     updateMyProfile,
     logout

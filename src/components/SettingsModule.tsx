@@ -30,7 +30,9 @@ import {
   Trash2,
   UserPlus,
   MessagesSquare,
-  UserCheck
+  UserCheck,
+  UserX,
+  Clock3
 } from 'lucide-react';
 
 const ROLE_NAMES: Record<UserRole, string> = {
@@ -62,6 +64,7 @@ export const SettingsModule: React.FC = () => {
   });
   const [creatingMember, setCreatingMember] = useState(false);
   const [memberNotice, setMemberNotice] = useState<string | null>(null);
+  const [processingApplicationUid, setProcessingApplicationUid] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -180,11 +183,36 @@ export default {
     }
   };
 
+  const handleApplicationDecision = async (user: UserProfile, approve: boolean) => {
+    const documentId = user.profileDocId || user.uid;
+    setProcessingApplicationUid(documentId);
+    setMemberNotice(null);
+    try {
+      if (approve) {
+        await approveUserAccess(documentId);
+        setMemberNotice(`已批准 ${user.name}（${user.studentId}）加入班级空间`);
+      } else {
+        await setUserAccessDisabled(documentId, true);
+        setMemberNotice(`已拒绝 ${user.name}（${user.studentId}）的申请，之后仍可在成员列表中重新批准`);
+      }
+    } catch (error) {
+      setMemberNotice(error instanceof Error ? error.message : '处理注册申请失败');
+    } finally {
+      setProcessingApplicationUid(null);
+    }
+  };
+
   // Filtered users list
   const filteredUsers = users.filter(u => 
     u.name.toLowerCase().includes(searchUser.toLowerCase()) || 
     (u.studentId && u.studentId.includes(searchUser)) ||
     u.email.toLowerCase().includes(searchUser.toLowerCase())
+  );
+  const pendingApplications = users.filter((user) =>
+    Boolean(user.authUid)
+    && user.role !== 'super_admin'
+    && user.approved !== true
+    && user.disabled !== true
   );
 
   // If user is not super admin, show security barrier
@@ -234,6 +262,76 @@ export default {
         </div>
       </div>
 
+      {memberNotice && (
+        <div role="status" className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-semibold text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-300">
+          {memberNotice}
+        </div>
+      )}
+
+      {/* Pending self-registration applications */}
+      <div className="space-y-4 rounded-3xl border border-amber-200/70 bg-amber-50/70 p-6 shadow-xl shadow-amber-950/5 backdrop-blur-xl dark:border-amber-900/50 dark:bg-amber-950/20">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
+              <Clock3 className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+              待审批注册申请
+            </h3>
+            <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+              请核对真实姓名和学号。批准前，申请人无法读取任何班级数据。
+            </p>
+          </div>
+          <span className="self-start rounded-full border border-amber-300 bg-amber-100 px-3 py-1 text-xs font-black text-amber-800 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+            {pendingApplications.length} 人待处理
+          </span>
+        </div>
+
+        {pendingApplications.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-amber-300/80 px-4 py-6 text-center text-xs text-slate-500 dark:border-amber-800/70 dark:text-slate-400">
+            暂无待审批申请
+          </div>
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {pendingApplications.map((user) => {
+              const documentId = user.profileDocId || user.uid;
+              const isProcessing = processingApplicationUid === documentId;
+              return (
+                <div key={user.uid} className="rounded-2xl border border-white/70 bg-white/80 p-4 dark:border-white/10 dark:bg-slate-900/70">
+                  <div className="flex items-start gap-3">
+                    <img src={user.avatar} alt="" className="h-10 w-10 shrink-0 rounded-xl bg-slate-100 dark:bg-slate-800" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-slate-900 dark:text-white">{user.name}</p>
+                      <p className="mt-0.5 text-xs font-mono text-slate-600 dark:text-slate-300">学号：{user.studentId}</p>
+                      {user.email ? <p className="mt-0.5 truncate text-[11px] text-slate-500">{user.email}</p> : null}
+                      <p className="mt-0.5 truncate text-[10px] font-mono text-slate-400" title="Firebase Auth UID">UID: {user.authUid}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => void handleApplicationDecision(user, true)}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      <UserCheck className="h-4 w-4" />
+                      {isProcessing ? '处理中...' : '批准'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isProcessing}
+                      onClick={() => void handleApplicationDecision(user, false)}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-300 dark:hover:bg-rose-950/30"
+                    >
+                      <UserX className="h-4 w-4" />
+                      拒绝
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* Create managed member */}
       <div className="p-6 rounded-3xl bg-white/40 dark:bg-slate-900/50 backdrop-blur-xl border border-white/50 dark:border-white/10 shadow-xl shadow-indigo-950/5 space-y-4">
         <div>
@@ -242,7 +340,7 @@ export default {
             开通成员账号
           </h3>
           <p className="text-xs text-slate-600 dark:text-slate-300 mt-1">
-            账号只能由你创建。把学号和初始密码私下交给同学，网页不再开放自助注册。
+            同学可以自助注册并等待你审批；你也可在这里直接创建并自动批准账号。
           </p>
         </div>
         <form onSubmit={handleCreateMember} className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -292,11 +390,6 @@ export default {
             {creatingMember ? '正在创建...' : '创建并批准访问'}
           </button>
         </form>
-        {memberNotice && (
-          <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-xs font-semibold text-indigo-700 dark:border-indigo-900 dark:bg-indigo-950/30 dark:text-indigo-300">
-            {memberNotice}
-          </div>
-        )}
       </div>
 
       {/* Section 1: Member Permissions & Roles Table */}
@@ -377,6 +470,8 @@ export default {
                       <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
                         !user.authUid
                           ? 'bg-slate-500/20 text-slate-700 dark:text-slate-300 border-slate-400/30'
+                          : user.approved !== true && user.disabled
+                          ? 'bg-rose-500/20 text-rose-800 dark:text-rose-300 border-rose-400/30'
                           : user.approved !== true
                           ? 'bg-amber-500/20 text-amber-800 dark:text-amber-300 border-amber-400/30'
                           : user.disabled
@@ -387,7 +482,7 @@ export default {
                             ? 'bg-amber-500/20 text-amber-900 dark:text-amber-300 border-amber-400/30'
                             : 'bg-white/70 text-slate-700 dark:bg-slate-800/70 dark:text-slate-300 border-white/40 dark:border-white/10'
                       }`}>
-                        {!user.authUid ? '未绑定登录账号' : user.approved !== true ? '待管理员批准' : user.disabled ? '已撤销访问' : ROLE_NAMES[user.role]}
+                        {!user.authUid ? '未绑定登录账号' : user.approved !== true && user.disabled ? '已拒绝（可重新批准）' : user.approved !== true ? '待管理员批准' : user.disabled ? '已撤销访问' : ROLE_NAMES[user.role]}
                       </span>
                     </td>
                     <td className="p-3">

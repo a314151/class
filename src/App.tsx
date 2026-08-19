@@ -70,7 +70,7 @@ function MainAppContent() {
           <p className="text-xs font-bold tracking-[0.28em] text-indigo-300">PRIVATE SPACE</p>
           <h1 className="mt-3 text-2xl font-black">私人班级空间</h1>
           <p className="mt-3 text-sm leading-6 text-slate-300">
-            仅限管理员已开通的班级成员访问。未登录状态不会加载或显示任何班级数据。
+            已批准的班级成员可访问。新同学可以先提交注册申请，审批前不会加载或显示任何班级数据。
           </p>
           {accessError && (
             <div className="mt-5 rounded-xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
@@ -82,9 +82,9 @@ function MainAppContent() {
             className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-500 px-5 py-3 text-sm font-bold shadow-lg shadow-indigo-950/40 transition hover:bg-indigo-400"
           >
             <LogIn className="h-4 w-4" />
-            验证身份并进入
+            登录或注册
           </button>
-          <p className="mt-4 text-xs text-slate-500">没有账号请联系管理员，不提供公开注册。</p>
+          <p className="mt-4 text-xs text-slate-500">注册后需等待管理员核对姓名和学号并批准。</p>
         </div>
 
         {showAuthModal && (
