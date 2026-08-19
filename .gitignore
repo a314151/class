@@ -3,6 +3,7 @@ build/
 dist/
 coverage/
 .playwright-cli/
+output/playwright/
 .DS_Store
 *.log
 .env*
