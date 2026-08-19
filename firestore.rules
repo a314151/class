@@ -71,6 +71,12 @@ service cloud.firestore {
       allow read: if true;
       allow write: if true;
     }
+
+    // System flags
+    match /system/{systemId} {
+      allow read: if true;
+      allow write: if true;
+    }
   }
 }
 

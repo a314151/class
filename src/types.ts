@@ -2,6 +2,7 @@ export type UserRole = 'super_admin' | 'committee' | 'member';
 
 export interface UserProfile {
   uid: string;
+  authUid?: string;
   name: string;
   email: string;
   studentId: string;
@@ -10,6 +11,7 @@ export interface UserProfile {
   birthday?: string; // YYYY-MM-DD
   phone?: string;
   bio?: string;
+  passwordHash?: string;
   createdAt: string;
 }
 

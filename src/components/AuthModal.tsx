@@ -211,11 +211,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
               }`}
             >
-              学号 / 邮箱密码登录
+              学号密码登录
             </button>
             <button
               type="button"
-              onClick={() => { setMode('register'); setError(null); }}
+              onClick={() => { setMode('register'); setError(null); if (accountInput && !studentId) setStudentId(accountInput); }}
               className={`flex-1 py-1.5 text-xs font-bold rounded-xl transition-all ${
                 mode === 'register'
                   ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-xs'
@@ -228,9 +228,24 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         )}
 
         {error && (
-          <div className="p-3 bg-rose-500/20 border border-rose-400/40 rounded-2xl text-xs text-rose-900 dark:text-rose-200 font-semibold flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-            <span>{error}</span>
+          <div className="p-3 bg-rose-500/15 border border-rose-400/40 rounded-2xl text-xs text-rose-900 dark:text-rose-200 font-medium space-y-1.5">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+              <span className="font-semibold">{error}</span>
+            </div>
+            {mode === 'login' && error.includes('未找到学号') && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStudentId(accountInput.trim());
+                  setMode('register');
+                  setError(null);
+                }}
+                className="ml-6 px-2.5 py-1 text-[11px] font-bold bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors shadow-xs"
+              >
+                点此直接使用「{accountInput.trim()}」注册
+              </button>
+            )}
           </div>
         )}
 
@@ -240,29 +255,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <form onSubmit={handleLoginSubmit} className="space-y-3">
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  学号 或 注册邮箱 *
+                  学号 (班级唯一标识符) *
                 </label>
                 <div className="relative">
                   <Hash className="w-3.5 h-3.5 absolute left-3 top-3 text-indigo-500" />
                   <input
                     type="text"
                     required
-                    placeholder="输入学号 (如 20260002) 或 邮箱"
+                    placeholder="输入学号 (如 202401382 或 2024013182)"
                     value={accountInput}
                     onChange={(e) => setAccountInput(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 text-slate-900 dark:text-slate-100 font-medium focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
+                    className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 text-slate-900 dark:text-slate-100 font-medium focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all font-mono"
                   />
                 </div>
                 <div className="flex items-center gap-1 mt-1 text-[11px] text-slate-500 dark:text-slate-400">
                   <HelpCircle className="w-3 h-3 text-indigo-500 shrink-0" />
-                  <span>可以直接输入您的学号（例：<strong className="text-indigo-600 dark:text-indigo-400">20260002</strong>）</span>
+                  <span>请输入您注册时绑定的学号与密码</span>
                 </div>
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                    账号密码 *
+                    注册密码 *
                   </label>
                   <button
                     type="button"
@@ -277,7 +292,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                   <input
                     type="password"
                     required
-                    placeholder="输入注册时设置的密码"
+                    placeholder="输入注册时绑定的密码"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full pl-9 pr-3 py-2.5 text-xs rounded-xl border border-slate-200/80 dark:border-slate-700 bg-white/80 dark:bg-slate-800/80 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
@@ -297,7 +312,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div className="relative flex items-center justify-center pt-1">
               <div className="border-t border-white/40 dark:border-white/10 w-full" />
               <span className="bg-transparent px-3 text-[11px] font-medium text-slate-500 uppercase">
-                或使用其他方式
+                其他登录方式
               </span>
             </div>
 
@@ -331,10 +346,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <div className="text-center pt-1">
               <button
                 type="button"
-                onClick={() => { setMode('register'); setError(null); }}
+                onClick={() => {
+                  if (accountInput && !studentId) setStudentId(accountInput);
+                  setMode('register');
+                  setError(null);
+                }}
                 className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
               >
-                还没有注册学号？点此注册加入班级
+                新同学首次加入？点此注册学号绑定密码
               </button>
             </div>
           </div>

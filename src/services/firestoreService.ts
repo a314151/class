@@ -74,7 +74,8 @@ export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
   return onSnapshot(usersRef, (snapshot) => {
     const rawUsers: UserProfile[] = [];
     snapshot.forEach((docSnap) => {
-      rawUsers.push({ ...docSnap.data(), uid: docSnap.id } as UserProfile);
+      const data = docSnap.data() as UserProfile;
+      rawUsers.push({ ...data, uid: data.uid || docSnap.id });
     });
 
     // Deduplicate: Keep one super_admin and one per studentId
@@ -96,9 +97,15 @@ export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
           hasAdmin = true;
         }
       } else {
-        const key = u.studentId ? `student_${u.studentId}` : u.uid;
-        if (!uniqueUsersMap.has(key)) {
-          uniqueUsersMap.set(key, u);
+        const studentKey = (u.studentId || u.uid || '').trim();
+        if (studentKey) {
+          if (!uniqueUsersMap.has(studentKey)) {
+            uniqueUsersMap.set(studentKey, u);
+          } else {
+            // Merge in case of richer fields
+            const existing = uniqueUsersMap.get(studentKey)!;
+            uniqueUsersMap.set(studentKey, { ...existing, ...u });
+          }
         }
       }
     }
@@ -115,6 +122,20 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
     if (userDoc.exists()) {
       return userDoc.data() as UserProfile;
     }
+    const studentDoc = await getDoc(doc(db, 'users', `student_${uid}`));
+    if (studentDoc.exists()) {
+      return studentDoc.data() as UserProfile;
+    }
+    const qAuth = query(collection(db, 'users'), where('authUid', '==', uid));
+    const snapAuth = await getDocs(qAuth);
+    if (!snapAuth.empty) {
+      return snapAuth.docs[0].data() as UserProfile;
+    }
+    const qUid = query(collection(db, 'users'), where('uid', '==', uid));
+    const snapUid = await getDocs(qUid);
+    if (!snapUid.empty) {
+      return snapUid.docs[0].data() as UserProfile;
+    }
     return null;
   } catch (e) {
     handleFirestoreError(e, OperationType.GET, `users/${uid}`);
@@ -122,22 +143,31 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
   }
 };
 
-export const getUserProfileByStudentId = async (studentId: string): Promise<UserProfile | null> => {
+export const getUserProfileByStudentId = async (studentIdRaw: string): Promise<UserProfile | null> => {
   try {
-    // 1. Direct doc check student_{studentId} or {studentId}
-    const directDoc = await getDoc(doc(db, 'users', `student_${studentId}`));
-    if (directDoc.exists()) {
-      return directDoc.data() as UserProfile;
-    }
+    const studentId = studentIdRaw.trim();
+    // 1. Direct doc check studentId or student_{studentId}
     const rawDoc = await getDoc(doc(db, 'users', studentId));
     if (rawDoc.exists()) {
       return rawDoc.data() as UserProfile;
+    }
+    const directDoc = await getDoc(doc(db, 'users', `student_${studentId}`));
+    if (directDoc.exists()) {
+      return directDoc.data() as UserProfile;
     }
     // 2. Query check
     const q = query(collection(db, 'users'), where('studentId', '==', studentId));
     const snap = await getDocs(q);
     if (!snap.empty) {
       return snap.docs[0].data() as UserProfile;
+    }
+    // 3. Fallback scan all users in case of string formatting
+    const allUsersSnap = await getDocs(collection(db, 'users'));
+    for (const d of allUsersSnap.docs) {
+      const u = d.data() as UserProfile;
+      if (u.studentId && u.studentId.trim() === studentId) {
+        return u;
+      }
     }
     return null;
   } catch (e) {
@@ -146,9 +176,37 @@ export const getUserProfileByStudentId = async (studentId: string): Promise<User
   }
 };
 
+export const getUserProfileByEmail = async (emailRaw: string): Promise<UserProfile | null> => {
+  try {
+    const email = emailRaw.trim().toLowerCase();
+    const q = query(collection(db, 'users'), where('email', '==', email));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      return snap.docs[0].data() as UserProfile;
+    }
+    const allUsersSnap = await getDocs(collection(db, 'users'));
+    for (const d of allUsersSnap.docs) {
+      const u = d.data() as UserProfile;
+      if (u.email && u.email.trim().toLowerCase() === email) {
+        return u;
+      }
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+};
+
 export const saveUserProfile = async (profile: UserProfile): Promise<void> => {
   try {
-    await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
+    const mainUid = profile.studentId || profile.uid;
+    await setDoc(doc(db, 'users', mainUid), profile, { merge: true });
+    if (profile.uid && profile.uid !== mainUid) {
+      await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
+    }
+    if (profile.studentId) {
+      await setDoc(doc(db, 'users', `student_${profile.studentId}`), profile, { merge: true });
+    }
   } catch (e) {
     handleFirestoreError(e, OperationType.WRITE, `users/${profile.uid}`);
     throw e;
@@ -653,27 +711,61 @@ export const deleteFeedback = async (id: string): Promise<void> => {
 
 // ================= CLASS SETTINGS =================
 export const subscribeToSettings = (callback: (settings: ClassSettings) => void) => {
+  // First load from localStorage if available for zero-latency UI
+  const cached = localStorage.getItem('class_space_cached_settings');
+  if (cached) {
+    try {
+      callback(JSON.parse(cached));
+    } catch (e) {}
+  }
+
   return onSnapshot(doc(db, 'settings', 'general'), (docSnap) => {
     if (docSnap.exists()) {
-      callback(docSnap.data() as ClassSettings);
+      const data = docSnap.data() as ClassSettings;
+      localStorage.setItem('class_space_cached_settings', JSON.stringify(data));
+      callback(data);
     } else {
+      const cached = localStorage.getItem('class_space_cached_settings');
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          callback(parsed);
+          setDoc(doc(db, 'settings', 'general'), parsed, { merge: true }).catch(() => {});
+          return;
+        } catch (e) {}
+      }
       const defaultSettings: ClassSettings = {
         className: '高三 (1) 班 · 卓越空间',
         motto: '博学笃行，求是拓新，追光而行',
-        semester: '2026年 春季学期 (第3学期)',
-        announcement: '欢迎大家进入班级空间！期中模拟考与研学报名正在进行中，请及时查看通知与提交表格。',
+        semester: '2026年 春季学期',
+        announcement: '欢迎来到班级空间！期中模拟考与研学报名正在进行中，请及时查看通知与提交表格。',
         cloudflareWorkerUrl: 'https://class-space-worker.pages.dev/api/upload',
         r2BucketName: 'class-space-assets'
       };
+      localStorage.setItem('class_space_cached_settings', JSON.stringify(defaultSettings));
       callback(defaultSettings);
     }
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, 'settings/general');
+    const cached = localStorage.getItem('class_space_cached_settings');
+    if (cached) {
+      try {
+        callback(JSON.parse(cached));
+      } catch (e) {}
+    }
   });
 };
 
 export const saveSettings = async (settings: Partial<ClassSettings>): Promise<void> => {
   try {
+    const currentCached = localStorage.getItem('class_space_cached_settings');
+    let merged = settings;
+    if (currentCached) {
+      try {
+        merged = { ...JSON.parse(currentCached), ...settings };
+      } catch (e) {}
+    }
+    localStorage.setItem('class_space_cached_settings', JSON.stringify(merged));
     await setDoc(doc(db, 'settings', 'general'), settings, { merge: true });
   } catch (e) {
     handleFirestoreError(e, OperationType.WRITE, 'settings/general');
@@ -685,18 +777,27 @@ export const saveSettings = async (settings: Partial<ClassSettings>): Promise<vo
 // ================= SEED SAMPLE DATA =================
 export const seedInitialClassData = async (adminUid: string, adminName: string) => {
   try {
-    const noticesCheck = await getDocs(collection(db, 'notices'));
-    if (!noticesCheck.empty) return; // Already seeded
+    const flagDoc = await getDoc(doc(db, 'system', 'seed_flag'));
+    if (flagDoc.exists()) return; // System already initialized once, NEVER re-seed deleted items!
 
-    // 1. Settings
-    await setDoc(doc(db, 'settings', 'general'), {
-      className: '高三 (1) 班 · 卓越空间',
-      motto: '博学笃行，求是拓新，追光而行',
-      semester: '2026年 春季学期',
-      announcement: '🎉 欢迎来到我们班专属的智慧班级空间！通知、日程、表决、私聊与征集均已实时同步。',
-      cloudflareWorkerUrl: 'https://class-files-worker.workers.dev/upload',
-      r2BucketName: 'class-vault'
+    // Mark as initialized permanently
+    await setDoc(doc(db, 'system', 'seed_flag'), {
+      seeded: true,
+      seededAt: new Date().toISOString()
     });
+
+    // 1. Settings (only seed if not already configured)
+    const settingsDoc = await getDoc(doc(db, 'settings', 'general'));
+    if (!settingsDoc.exists()) {
+      await setDoc(doc(db, 'settings', 'general'), {
+        className: '高三 (1) 班 · 卓越空间',
+        motto: '博学笃行，求是拓新，追光而行',
+        semester: '2026年 春季学期',
+        announcement: '🎉 欢迎来到我们班专属的智慧班级空间！通知、日程、表决、私聊与征集均已实时同步。',
+        cloudflareWorkerUrl: 'https://class-files-worker.workers.dev/upload',
+        r2BucketName: 'class-vault'
+      });
+    }
 
     // 2. Initial Notices
     const sampleNotices: Omit<Notice, 'id'>[] = [

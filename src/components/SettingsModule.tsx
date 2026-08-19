@@ -393,34 +393,53 @@ export default {
 
       {/* Section 2: General Class Space Settings */}
       <div className="p-6 rounded-3xl bg-white/40 dark:bg-slate-900/50 backdrop-blur-xl border border-white/50 dark:border-white/10 shadow-xl shadow-indigo-950/5 space-y-4">
-        <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2 pb-2 border-b border-white/40 dark:border-white/10">
-          <Edit className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-          班级空间基本资料配置
-        </h3>
+        <div className="flex items-center justify-between pb-2 border-b border-white/40 dark:border-white/10">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <Edit className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              班级空间基本资料配置
+            </h3>
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 font-medium">
+              修改后将实时同步至全班导航栏、公告头条与主页展示（支持即时保存与离线持久化）
+            </p>
+          </div>
+          {saveSuccess && (
+            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 animate-in fade-in bg-emerald-500/15 px-3 py-1 rounded-xl border border-emerald-500/30">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              已保存并实时同步
+            </span>
+          )}
+        </div>
 
         <form onSubmit={handleSaveGeneralSettings} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                班级全称
+                班级全称 *
               </label>
               <input
                 type="text"
+                required
                 value={settings.className}
                 onChange={(e) => setSettings({ ...settings, className: e.target.value })}
-                className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100"
+                onBlur={() => saveSettings(settings).catch(() => {})}
+                placeholder="例如：高三 (1) 班 · 卓越空间"
+                className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all font-semibold"
               />
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                当前学期
+                当前学期 *
               </label>
               <input
                 type="text"
+                required
                 value={settings.semester}
                 onChange={(e) => setSettings({ ...settings, semester: e.target.value })}
-                className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100"
+                onBlur={() => saveSettings(settings).catch(() => {})}
+                placeholder="例如：2026年 春季学期"
+                className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all font-semibold"
               />
             </div>
           </div>
@@ -433,7 +452,9 @@ export default {
               type="text"
               value={settings.motto}
               onChange={(e) => setSettings({ ...settings, motto: e.target.value })}
-              className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100"
+              onBlur={() => saveSettings(settings).catch(() => {})}
+              placeholder="例如：博学笃行，求是拓新，追光而行"
+              className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
             />
           </div>
 
@@ -445,22 +466,22 @@ export default {
               rows={2}
               value={settings.announcement}
               onChange={(e) => setSettings({ ...settings, announcement: e.target.value })}
-              className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 resize-none"
+              onBlur={() => saveSettings(settings).catch(() => {})}
+              placeholder="输入全班置顶轮播广播语..."
+              className="w-full px-3.5 py-2.5 text-xs rounded-2xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 backdrop-blur-md text-slate-900 dark:text-slate-100 resize-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500 transition-all"
             />
           </div>
 
           <div className="flex items-center justify-between pt-2">
-            {saveSuccess && (
-              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1 animate-in fade-in">
-                <CheckCircle2 className="w-4 h-4" />
-                班级设置已实时更新保存！
-              </span>
-            )}
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              💡 离开输入框时已自动保存，亦可点击右侧按钮立即确认提交
+            </span>
             <button
               type="submit"
-              className="ml-auto px-6 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl shadow-lg shadow-indigo-600/30 border border-white/20 active:scale-95"
+              className="px-6 py-2.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-2xl shadow-lg shadow-indigo-600/30 border border-white/20 active:scale-95 transition-all flex items-center gap-1.5"
             >
-              保存班级全局资料
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              保存并同步全班
             </button>
           </div>
         </form>
