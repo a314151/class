@@ -42,6 +42,10 @@ const readableSendError = (error: unknown): string => {
   return '消息发送失败，请检查网络后重试';
 };
 
+const getMessagingUid = (user: UserProfile): string => (
+  user.authUid?.trim() || user.uid.trim()
+);
+
 export const ChatModule: React.FC = () => {
   const { profile, isCommittee } = useAuth();
   const [chatMode, setChatMode] = useState<'public' | 'direct'>('public');
@@ -66,6 +70,8 @@ export const ChatModule: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const dmUserDropdownRef = useRef<HTMLDivElement>(null);
+  const currentMessagingUid = profile ? getMessagingUid(profile) : null;
+  const selectedDmUid = selectedDmUser ? getMessagingUid(selectedDmUser) : null;
 
   // Auto scroll to bottom
   const scrollToBottom = () => {
@@ -87,24 +93,26 @@ export const ChatModule: React.FC = () => {
       setUsers(data);
       setSelectedDmUser((current) => {
         if (!profile) return null;
-        return (current && data.find((user) => user.uid === current.uid && user.uid !== profile.uid))
-          || data.find((user) => user.uid !== profile.uid)
+        const selfUid = getMessagingUid(profile);
+        const currentUid = current ? getMessagingUid(current) : null;
+        return (currentUid && data.find((user) => getMessagingUid(user) === currentUid && getMessagingUid(user) !== selfUid))
+          || data.find((user) => getMessagingUid(user) !== selfUid)
           || null;
       });
     });
     return () => unsub();
-  }, [profile?.uid]);
+  }, [profile]);
 
   // Subscribe to direct messages when DM partner changes
   useEffect(() => {
-    if (chatMode !== 'direct' || !profile || !selectedDmUser) return;
-    const convoId = getConversationId(profile.uid, selectedDmUser.uid);
+    if (chatMode !== 'direct' || !currentMessagingUid || !selectedDmUid) return;
+    const convoId = getConversationId(currentMessagingUid, selectedDmUid);
     const unsub = subscribeToDirectMessages(convoId, (data) => {
       setDirectMessages(data);
       setTimeout(scrollToBottom, 100);
     });
     return () => unsub();
-  }, [chatMode, profile?.uid, selectedDmUser?.uid]);
+  }, [chatMode, currentMessagingUid, selectedDmUid]);
 
   // Click outside listener
   useEffect(() => {
@@ -123,13 +131,13 @@ export const ChatModule: React.FC = () => {
   // Send public message
   const handleSendPublic = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!inputMsg.trim() && !attachmentUrl) || !profile) return;
+    if ((!inputMsg.trim() && !attachmentUrl) || !profile || !currentMessagingUid) return;
 
     setSendError(null);
     setSendingMode('public');
     try {
       await sendChatMessage({
-        senderUid: profile.uid,
+        senderUid: currentMessagingUid,
         senderName: profile.name,
         senderAvatar: profile.avatar,
         senderRole: profile.role,
@@ -150,16 +158,16 @@ export const ChatModule: React.FC = () => {
   // Send direct message
   const handleSendDirect = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!dmInput.trim() && !dmAttachment) || !profile || !selectedDmUser) return;
+    if ((!dmInput.trim() && !dmAttachment) || !profile || !selectedDmUser || !currentMessagingUid || !selectedDmUid) return;
 
     setSendError(null);
     setSendingMode('direct');
     try {
-      const convoId = getConversationId(profile.uid, selectedDmUser.uid);
+      const convoId = getConversationId(currentMessagingUid, selectedDmUid);
       await sendDirectMessage({
         conversationId: convoId,
-        senderUid: profile.uid,
-        recipientUid: selectedDmUser.uid,
+        senderUid: currentMessagingUid,
+        recipientUid: selectedDmUid,
         senderName: profile.name,
         senderAvatar: profile.avatar,
         content: dmInput.trim(),
@@ -289,7 +297,7 @@ export const ChatModule: React.FC = () => {
               </div>
             ) : (
               publicMessages.map((msg) => {
-                const isMe = profile?.uid === msg.senderUid;
+                const isMe = currentMessagingUid === msg.senderUid;
                 const roleInfo = ROLE_BADGE[msg.senderRole] || ROLE_BADGE.member;
 
                 return (
@@ -412,11 +420,12 @@ export const ChatModule: React.FC = () => {
               全班同学 ({users.length})
             </div>
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 scrollbar-none">
-              {users.filter(u => u.uid !== profile?.uid).map((user) => {
-                const isSelected = selectedDmUser?.uid === user.uid;
+              {users.filter((user) => getMessagingUid(user) !== currentMessagingUid).map((user) => {
+                const userMessagingUid = getMessagingUid(user);
+                const isSelected = selectedDmUid === userMessagingUid;
                 return (
                   <button
-                    key={user.uid}
+                    key={userMessagingUid}
                     onClick={() => setSelectedDmUser(user)}
                     className={`w-full p-2.5 flex items-center gap-2.5 text-left transition-colors ${
                       isSelected
@@ -483,16 +492,16 @@ export const ChatModule: React.FC = () => {
 
                     {showDmUserDropdown && (
                       <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl p-1 z-30 max-h-52 overflow-y-auto">
-                        {users.filter(u => u.uid !== profile?.uid).map((u) => (
+                        {users.filter((user) => getMessagingUid(user) !== currentMessagingUid).map((user) => (
                           <button
-                            key={u.uid}
+                            key={getMessagingUid(user)}
                             onClick={() => {
-                              setSelectedDmUser(u);
+                              setSelectedDmUser(user);
                               setShowDmUserDropdown(false);
                             }}
                             className="w-full px-2 py-1.5 text-xs text-left rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 truncate"
                           >
-                            {u.name}
+                            {user.name}
                           </button>
                         ))}
                       </div>
@@ -512,7 +521,7 @@ export const ChatModule: React.FC = () => {
                 </div>
               ) : (
                 directMessages.map((dm) => {
-                  const isMe = profile?.uid === dm.senderUid;
+                  const isMe = currentMessagingUid === dm.senderUid;
                   return (
                     <div
                       key={dm.id}
