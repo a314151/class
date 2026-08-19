@@ -13,6 +13,7 @@ type SubmittingAction = 'member' | 'admin' | 'register' | null;
 const readableAuthError = (error: unknown): string => {
   const code = (error as { code?: string })?.code;
   if (code === 'auth/invalid-credential') return '学号或密码错误';
+  if (code === 'auth/operation-not-allowed') return '成员学号登录尚未启用，请联系管理员开启“电子邮件地址/密码”登录方式';
   if (code === 'auth/email-already-in-use') return '该学号已注册。如已提交申请，请等待管理员审批；如已批准，请直接登录。';
   if (code === 'auth/weak-password') return '密码强度不足，请使用至少 8 位密码';
   if (code === 'auth/too-many-requests') return '尝试次数过多，请稍后再试';
