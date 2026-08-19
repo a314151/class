@@ -8,9 +8,12 @@ import {
   subscribeToUsers, 
   updateUserRole, 
   subscribeToSettings, 
-  saveSettings 
+  saveSettings,
+  cleanupDuplicateUsers,
+  deleteUserDoc
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   ShieldCheck, 
   Users, 
@@ -24,7 +27,9 @@ import {
   Key,
   ShieldAlert,
   AlertTriangle,
-  Crown
+  Crown,
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 
 const ROLE_NAMES: Record<UserRole, string> = {
@@ -47,6 +52,9 @@ export const SettingsModule: React.FC = () => {
   });
   const [copied, setCopied] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+  const [cleanNotice, setCleanNotice] = useState<string | null>(null);
+  const [userToDelete, setUserToDelete] = useState<UserProfile | null>(null);
 
   // Admin authentication input for non-admin view
   const [adminKey, setAdminKey] = useState('');
@@ -150,6 +158,30 @@ export default {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleCleanDuplicates = async () => {
+    setCleaning(true);
+    setCleanNotice(null);
+    try {
+      const count = await cleanupDuplicateUsers();
+      setCleanNotice(count > 0 ? `已成功清理 ${count} 个重复账号与冗余数据` : '数据正常，未发现多余的重复账号');
+      setTimeout(() => setCleanNotice(null), 3000);
+    } catch (e) {
+      console.error('Clean error:', e);
+      setCleanNotice('清理失败，请重试');
+    } finally {
+      setCleaning(false);
+    }
+  };
+
+  const handleDeleteUser = async (u: UserProfile) => {
+    try {
+      await deleteUserDoc(u.uid);
+      setUserToDelete(null);
+    } catch (e) {
+      console.error('Delete user error:', e);
+    }
+  };
+
   // Filtered users list
   const filteredUsers = users.filter(u => 
     u.name.toLowerCase().includes(searchUser.toLowerCase()) || 
@@ -244,18 +276,36 @@ export default {
             </p>
           </div>
 
-          {/* Search bar */}
-          <div className="relative w-full sm:w-64">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="搜索姓名 / 学号 / 邮箱"
-              value={searchUser}
-              onChange={(e) => setSearchUser(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 text-slate-900 dark:text-slate-100"
-            />
+          {/* Search bar & Deduplication */}
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={handleCleanDuplicates}
+              disabled={cleaning}
+              title="自动清理重复账号与冗余数据"
+              className="px-3 py-1.5 text-xs font-bold rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5 shrink-0 transition-all active:scale-95"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${cleaning ? 'animate-spin' : ''}`} />
+              {cleaning ? '正在排重...' : '一键排重清洗'}
+            </button>
+            <div className="relative w-full sm:w-60">
+              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="搜索姓名 / 学号 / 邮箱"
+                value={searchUser}
+                onChange={(e) => setSearchUser(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200/70 dark:border-slate-700 bg-white/70 dark:bg-slate-800/70 text-slate-900 dark:text-slate-100"
+              />
+            </div>
           </div>
         </div>
+
+        {cleanNotice && (
+          <div className="p-3 bg-indigo-500/20 border border-indigo-400/40 rounded-2xl text-xs text-indigo-900 dark:text-indigo-200 font-semibold flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-indigo-500 shrink-0" />
+            {cleanNotice}
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -265,13 +315,14 @@ export default {
                 <th className="p-3">学号</th>
                 <th className="p-3">公历生日</th>
                 <th className="p-3">当前身份</th>
-                <th className="p-3 text-right">角色权限指派</th>
+                <th className="p-3">角色权限指派</th>
+                <th className="p-3 text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/40 dark:divide-slate-800 text-slate-800 dark:text-slate-200 font-medium">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-slate-500 font-medium">
+                  <td colSpan={6} className="p-8 text-center text-slate-500 font-medium">
                     暂无匹配的同学记录
                   </td>
                 </tr>
@@ -310,7 +361,7 @@ export default {
                         {ROLE_NAMES[user.role]}
                       </span>
                     </td>
-                    <td className="p-3 text-right">
+                    <td className="p-3">
                       <select
                         value={user.role}
                         onChange={(e) => handleRoleChange(user.uid, e.target.value as UserRole)}
@@ -320,6 +371,17 @@ export default {
                         <option value="committee">⭐ 班委会委员</option>
                         <option value="member">👤 普通成员</option>
                       </select>
+                    </td>
+                    <td className="p-3 text-right">
+                      {user.role !== 'super_admin' && (
+                        <button
+                          onClick={() => setUserToDelete(user)}
+                          title="从班级空间移除该账号"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -465,6 +527,20 @@ export default {
           </pre>
         </div>
       </div>
+
+      {/* Confirm Delete User Account Modal */}
+      <ConfirmModal
+        isOpen={Boolean(userToDelete)}
+        title="确认从班级空间移除该成员账号？"
+        message={`确定要将 ${userToDelete?.name} (学号: ${userToDelete?.studentId || '无'}) 从班级空间花名册中彻底移除吗？此操作不可逆。`}
+        confirmText="确认移除"
+        onConfirm={async () => {
+          if (userToDelete) {
+            await handleDeleteUser(userToDelete);
+          }
+        }}
+        onClose={() => setUserToDelete(null)}
+      />
     </div>
   );
 };

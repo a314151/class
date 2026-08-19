@@ -5,9 +5,11 @@ import {
   subscribeToBirthdayWishes, 
   sendBirthdayWish, 
   toggleLikeWish, 
+  deleteBirthdayWish,
   subscribeToUsers 
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   Cake, 
   Heart, 
@@ -17,7 +19,8 @@ import {
   Gift, 
   PartyPopper,
   MessageCircle,
-  ChevronDown
+  ChevronDown,
+  Trash2
 } from 'lucide-react';
 
 const WISH_TEMPLATES = [
@@ -29,13 +32,14 @@ const WISH_TEMPLATES = [
 ];
 
 export const BirthdayModule: React.FC = () => {
-  const { profile } = useAuth();
+  const { profile, isCommittee } = useAuth();
   const [wishes, setWishes] = useState<BirthdayWish[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [customMsg, setCustomMsg] = useState('');
   const [sending, setSending] = useState(false);
   const [showTemplateDropdown, setShowTemplateDropdown] = useState(false);
+  const [wishToDelete, setWishToDelete] = useState<BirthdayWish | null>(null);
 
   const templateRef = useRef<HTMLDivElement>(null);
 
@@ -359,7 +363,20 @@ export const BirthdayModule: React.FC = () => {
                       {wish.message}
                     </p>
 
-                    <div className="flex items-center justify-end mt-1.5">
+                    <div className="flex items-center justify-between mt-1.5 pt-1 border-t border-slate-100 dark:border-slate-800/80">
+                      <div>
+                        {(isCommittee || wish.senderUid === profile?.uid) && (
+                          <button
+                            onClick={() => setWishToDelete(wish)}
+                            className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-rose-600 transition-colors"
+                            title="删除此条祝福"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>删除</span>
+                          </button>
+                        )}
+                      </div>
+
                       <button
                         onClick={() => profile && toggleLikeWish(wish.id, profile.uid, !!hasLiked)}
                         className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-md transition-colors ${
@@ -379,6 +396,20 @@ export const BirthdayModule: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Confirm Delete Wish Modal */}
+      <ConfirmModal
+        isOpen={Boolean(wishToDelete)}
+        title="确认删除该条生日祝福？"
+        message={`确定要删除 ${wishToDelete?.senderName} 送给 @${wishToDelete?.targetName} 的祝福吗？`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (wishToDelete) {
+            await deleteBirthdayWish(wishToDelete.id);
+          }
+        }}
+        onClose={() => setWishToDelete(null)}
+      />
     </div>
   );
 };

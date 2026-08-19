@@ -8,10 +8,17 @@ import {
   createUserWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
-  signInAnonymously
+  signInAnonymously,
+  sendPasswordResetEmail
 } from '../firebase';
 import { UserProfile, UserRole } from '../types';
-import { getUserProfile, saveUserProfile, seedInitialClassData } from '../services/firestoreService';
+import { 
+  getUserProfile, 
+  getUserProfileByStudentId, 
+  saveUserProfile, 
+  seedInitialClassData, 
+  cleanupDuplicateUsers 
+} from '../services/firestoreService';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -21,11 +28,14 @@ interface AuthContextType {
   isCommittee: boolean;
   isMember: boolean;
   loginWithGoogle: () => Promise<void>;
-  loginWithEmail: (email: string, pass: string) => Promise<void>;
-  registerWithEmail: (email: string, pass: string, name: string, studentId: string) => Promise<void>;
+  loginWithStudentIdOrEmail: (account: string, pass: string) => Promise<void>;
+  registerStudent: (studentId: string, name: string, email: string, pass: string) => Promise<void>;
+  sendPasswordReset: (account: string) => Promise<{ email: string; name?: string }>;
   claimSuperAdmin: (key: string) => Promise<boolean>;
   updateMyProfile: (data: Partial<UserProfile>) => Promise<void>;
   logout: () => Promise<void>;
+  loginWithEmail: (email: string, pass: string) => Promise<void>;
+  registerWithEmail: (email: string, pass: string, name: string, studentId: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -33,6 +43,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // Owner / Super Admin Email & Default Secret Admin Key
 const OWNER_EMAIL = 'lry674515314@gmail.com';
 const ADMIN_SECRET_KEYS = ['lry123321'];
+const CANONICAL_ADMIN_UID = 'admin_super_account';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -53,35 +64,78 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
   const [loading, setLoading] = useState(true);
 
+  // Initialize and run deduplication on start
+  useEffect(() => {
+    cleanupDuplicateUsers().catch((e) => console.warn('Deduplication cleanup notice:', e));
+  }, []);
+
+  const getCanonicalAdminProfile = (): UserProfile => ({
+    uid: CANONICAL_ADMIN_UID,
+    name: '李班长 (超级管理员)',
+    email: OWNER_EMAIL,
+    studentId: '20260001',
+    role: 'super_admin',
+    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=admin_canonical',
+    birthday: '2008-01-01',
+    bio: '班级空间超级管理员 / 班长',
+    phone: '',
+    createdAt: new Date().toISOString()
+  });
+
   const fetchOrCreateProfile = async (user: User, customRole?: UserRole, initialName?: string, initialStudentId?: string) => {
     try {
-      let existing = await getUserProfile(user.uid);
       const isOwner = user.email?.toLowerCase() === OWNER_EMAIL.toLowerCase() || adminOverride;
+
+      if (isOwner) {
+        const adminProf = getCanonicalAdminProfile();
+        await saveUserProfile(adminProf);
+        setProfile(adminProf);
+        localStorage.setItem('class_space_cached_profile', JSON.stringify(adminProf));
+        await seedInitialClassData(adminProf.uid, adminProf.name);
+        return;
+      }
+
+      // If anonymous user without explicit registration, do NOT create random user in Firestore!
+      if (user.isAnonymous && !initialStudentId) {
+        return;
+      }
+
+      // Check existing by studentId first if provided
+      let existing: UserProfile | null = null;
+      if (initialStudentId) {
+        existing = await getUserProfileByStudentId(initialStudentId);
+      }
       if (!existing) {
-        const assignedRole: UserRole = customRole || (isOwner ? 'super_admin' : 'member');
+        existing = await getUserProfile(user.uid);
+      }
+
+      if (!existing && initialStudentId) {
+        const canonicalStudentUid = `student_${initialStudentId.trim()}`;
         const newProfile: UserProfile = {
-          uid: user.uid,
-          name: initialName || user.displayName || (isOwner ? '李班长 (超级管理员)' : '同学'),
-          email: user.email || `${user.uid.slice(0, 6)}@class.local`,
-          studentId: initialStudentId || `2026${Math.floor(1000 + Math.random() * 9000)}`,
-          role: assignedRole,
-          avatar: user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
+          uid: canonicalStudentUid,
+          name: initialName || user.displayName || '同学',
+          email: user.email || `${initialStudentId}@class.local`,
+          studentId: initialStudentId.trim(),
+          role: customRole || 'member',
+          avatar: user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=student_${initialStudentId}`,
           birthday: '2008-06-15',
-          bio: isOwner ? '班级空间超级管理员 / 班长' : '热爱班集体，努力学习，共同进步！',
+          bio: '热爱班集体，努力学习，共同进步！',
           createdAt: new Date().toISOString()
         };
         await saveUserProfile(newProfile);
         existing = newProfile;
-      } else if (isOwner && existing.role !== 'super_admin') {
-        existing = { ...existing, role: 'super_admin' };
+      } else if (existing && initialName) {
+        existing = {
+          ...existing,
+          name: initialName,
+          email: user.email || existing.email
+        };
         await saveUserProfile(existing);
       }
-      setProfile(existing);
-      localStorage.setItem('class_space_cached_profile', JSON.stringify(existing));
 
-      // Trigger initial seeding if first time
-      if (existing.role === 'super_admin') {
-        await seedInitialClassData(existing.uid, existing.name);
+      if (existing) {
+        setProfile(existing);
+        localStorage.setItem('class_space_cached_profile', JSON.stringify(existing));
       }
     } catch (err) {
       console.warn('Profile fetch error, using local fallback:', err);
@@ -92,16 +146,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
-        await fetchOrCreateProfile(user);
+        if (adminOverride || user.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+          const adminProf = getCanonicalAdminProfile();
+          setProfile(adminProf);
+          localStorage.setItem('class_space_cached_profile', JSON.stringify(adminProf));
+          saveUserProfile(adminProf).catch(() => {});
+        } else if (!user.isAnonymous) {
+          await fetchOrCreateProfile(user);
+        }
       } else {
-        // If not logged in, auto sign in anonymously to ensure Firestore has valid connection
+        // Ensure anonymous auth for security rules without creating extra Firestore user records
         try {
           await signInAnonymously(auth);
         } catch (anonErr) {
           console.warn('Anonymous auth note:', anonErr);
         }
-        if (!adminOverride) {
-          setProfile((prev) => (prev?.role === 'super_admin' ? prev : null));
+        if (adminOverride) {
+          const adminProf = getCanonicalAdminProfile();
+          setProfile(adminProf);
         }
       }
       setLoading(false);
@@ -125,35 +187,156 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const loginWithEmail = async (email: string, pass: string) => {
+  // Register student with studentId, name, email and password binding
+  const registerStudent = async (studentIdRaw: string, nameRaw: string, emailRaw: string, pass: string) => {
     setLoading(true);
+    const studentId = studentIdRaw.trim();
+    const name = nameRaw.trim();
+    const email = emailRaw.trim();
+
+    if (!studentId || !name || !email || !pass) {
+      setLoading(false);
+      throw new Error('请完整填入学号、姓名、邮箱和密码');
+    }
+
+    // Check if studentId has already been registered
+    const existing = await getUserProfileByStudentId(studentId);
+    if (existing) {
+      setLoading(false);
+      throw new Error(`学号【${studentId}】已被注册！每个学号仅能绑定一次初始密码。如您是该同学，请直接输入学号与密码登录；若忘记密码请使用“找回密码”功能。`);
+    }
+
     try {
-      const result = await signInWithEmailAndPassword(auth, email, pass);
-      if (result.user) {
-        await fetchOrCreateProfile(result.user);
+      const result = await createUserWithEmailAndPassword(auth, email, pass);
+      const isOwner = email.toLowerCase() === OWNER_EMAIL.toLowerCase() || adminOverride;
+      const canonicalUid = isOwner ? CANONICAL_ADMIN_UID : `student_${studentId}`;
+
+      const newProfile: UserProfile = {
+        uid: canonicalUid,
+        name: name,
+        email: email,
+        studentId: studentId,
+        role: isOwner ? 'super_admin' : 'member',
+        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=student_${studentId}`,
+        birthday: '2008-06-15',
+        bio: isOwner ? '班级空间超级管理员 / 班长' : '热爱班集体，努力学习，共同进步！',
+        createdAt: new Date().toISOString()
+      };
+
+      await saveUserProfile(newProfile);
+      setProfile(newProfile);
+      localStorage.setItem('class_space_cached_profile', JSON.stringify(newProfile));
+    } catch (error: any) {
+      if (error.code === 'auth/email-already-in-use') {
+        throw new Error(`邮箱【${email}】已被其他账号使用，请使用您自己的常用邮箱或直接使用找回密码功能。`);
+      } else if (error.code === 'auth/weak-password') {
+        throw new Error('密码强度过低，密码长度至少需 6 位字符');
+      } else if (error.code === 'auth/invalid-email') {
+        throw new Error('请输入有效的邮箱地址格式（如：example@school.com）');
       }
-    } catch (error) {
-      console.error('Email login failed:', error);
       throw error;
     } finally {
       setLoading(false);
     }
   };
 
-  const registerWithEmail = async (email: string, pass: string, name: string, studentId: string) => {
+  // Login with studentId (or email) and password
+  const loginWithStudentIdOrEmail = async (accountRaw: string, pass: string) => {
     setLoading(true);
+    const account = accountRaw.trim();
+    if (!account || !pass) {
+      setLoading(false);
+      throw new Error('请输入学号（或邮箱）以及对应密码');
+    }
+
     try {
-      const result = await createUserWithEmailAndPassword(auth, email, pass);
-      if (result.user) {
-        const isOwner = email.toLowerCase() === OWNER_EMAIL.toLowerCase() || adminOverride;
-        await fetchOrCreateProfile(result.user, isOwner ? 'super_admin' : 'member', name, studentId);
+      let targetEmail = account;
+      let matchedProfile: UserProfile | null = null;
+
+      // If input is student ID (does not contain @)
+      if (!account.includes('@')) {
+        matchedProfile = await getUserProfileByStudentId(account);
+        if (!matchedProfile) {
+          throw new Error(`未找到学号【${account}】的注册信息，请先注册该学号加入班级。`);
+        }
+        targetEmail = matchedProfile.email;
       }
-    } catch (error) {
-      console.error('Email register failed:', error);
+
+      const result = await signInWithEmailAndPassword(auth, targetEmail, pass);
+      if (result.user) {
+        if (targetEmail.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+          setAdminOverride(true);
+          localStorage.setItem('class_space_admin_override', 'true');
+          const adminProf = getCanonicalAdminProfile();
+          setProfile(adminProf);
+          localStorage.setItem('class_space_cached_profile', JSON.stringify(adminProf));
+        } else {
+          if (!matchedProfile) {
+            matchedProfile = await getUserProfile(result.user.uid) || await getUserProfileByStudentId(account);
+          }
+          if (matchedProfile) {
+            setProfile(matchedProfile);
+            localStorage.setItem('class_space_cached_profile', JSON.stringify(matchedProfile));
+          }
+        }
+      }
+    } catch (error: any) {
+      console.error('Login error:', error);
+      if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential' || error.code === 'auth/user-not-found') {
+        throw new Error('学号或密码错误！请核对您注册时填写的密码，若忘记密码请点击下方“找回密码”。');
+      } else if (error.code === 'auth/too-many-requests') {
+        throw new Error('密码错误尝试次数过多，系统已临时保护，请稍后再试或通过邮箱重置密码。');
+      }
       throw error;
     } finally {
       setLoading(false);
     }
+  };
+
+  // Send password reset email
+  const sendPasswordReset = async (accountRaw: string): Promise<{ email: string; name?: string }> => {
+    setLoading(true);
+    const account = accountRaw.trim();
+    if (!account) {
+      setLoading(false);
+      throw new Error('请输入您注册时的学号或绑定邮箱');
+    }
+
+    try {
+      let targetEmail = account;
+      let studentName = '';
+
+      if (!account.includes('@')) {
+        const studentProfile = await getUserProfileByStudentId(account);
+        if (!studentProfile) {
+          throw new Error(`未找到学号【${account}】的注册记录，请核对学号是否输入正确。`);
+        }
+        targetEmail = studentProfile.email;
+        studentName = studentProfile.name;
+      }
+
+      await sendPasswordResetEmail(auth, targetEmail);
+      return { email: targetEmail, name: studentName };
+    } catch (error: any) {
+      console.error('Password reset error:', error);
+      if (error.code === 'auth/user-not-found') {
+        throw new Error(`未找到邮箱为【${account}】的用户，请确认注册信息。`);
+      } else if (error.code === 'auth/invalid-email') {
+        throw new Error('邮箱格式不正确，请重新输入。');
+      }
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Backwards compatibility wrappers
+  const loginWithEmail = async (email: string, pass: string) => {
+    return loginWithStudentIdOrEmail(email, pass);
+  };
+
+  const registerWithEmail = async (email: string, pass: string, name: string, studentId: string) => {
+    return registerStudent(studentId, name, email, pass);
   };
 
   const claimSuperAdmin = async (key: string): Promise<boolean> => {
@@ -169,26 +352,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setAdminOverride(true);
       localStorage.setItem('class_space_admin_override', 'true');
 
-      const adminUid = currentUser?.uid || profile?.uid || `admin_local_${Date.now()}`;
-      const adminProfile: UserProfile = {
-        uid: adminUid,
-        name: profile?.name || '李班长 (超级管理员)',
-        email: currentUser?.email || OWNER_EMAIL,
-        studentId: profile?.studentId || '20260001',
-        role: 'super_admin',
-        avatar: profile?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=admin_${adminUid}`,
-        birthday: profile?.birthday || '2008-01-01',
-        bio: profile?.bio || '班级空间超级管理员 / 班长',
-        phone: profile?.phone || '',
-        createdAt: profile?.createdAt || new Date().toISOString()
-      };
-
+      const adminProfile = getCanonicalAdminProfile();
       setProfile(adminProfile);
       localStorage.setItem('class_space_cached_profile', JSON.stringify(adminProfile));
 
-      // Asynchronously sync to database without blocking
-      saveUserProfile(adminProfile).catch((e) => console.warn('Sync profile to Firestore error:', e));
-      seedInitialClassData(adminUid, adminProfile.name).catch((e) => console.warn('Seed error:', e));
+      // Asynchronously sync to database and clean up duplicates
+      await saveUserProfile(adminProfile);
+      await seedInitialClassData(adminProfile.uid, adminProfile.name);
+      await cleanupDuplicateUsers();
 
       return true;
     } catch (err) {
@@ -236,11 +407,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isCommittee,
         isMember,
         loginWithGoogle,
-        loginWithEmail,
-        registerWithEmail,
+        loginWithStudentIdOrEmail,
+        registerStudent,
+        sendPasswordReset,
         claimSuperAdmin,
         updateMyProfile,
-        logout
+        logout,
+        loginWithEmail,
+        registerWithEmail
       }}
     >
       {children}

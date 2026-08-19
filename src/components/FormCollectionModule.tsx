@@ -616,6 +616,20 @@ export const FormCollectionModule: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Delete Modal */}
+      <ConfirmModal
+        isOpen={Boolean(formToDelete)}
+        title="确认删除该征集表单？"
+        message={`确定要删除表单 "${formToDelete?.title}" 吗？所有同学已填报的统计数据也将被彻底删除。`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (formToDelete) {
+            await deleteForm(formToDelete.id);
+          }
+        }}
+        onClose={() => setFormToDelete(null)}
+      />
     </div>
   );
 };

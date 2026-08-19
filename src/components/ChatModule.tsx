@@ -17,6 +17,7 @@ import {
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
 import { R2UploadButton } from './R2UploadButton';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   Send, 
   Users, 
@@ -51,6 +52,7 @@ export const ChatModule: React.FC = () => {
   const [dmInput, setDmInput] = useState('');
   const [dmAttachment, setDmAttachment] = useState('');
   const [showDmUserDropdown, setShowDmUserDropdown] = useState(false);
+  const [msgToDelete, setMsgToDelete] = useState<ChatMessage | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
@@ -320,7 +322,7 @@ export const ChatModule: React.FC = () => {
                             {msg.isPinned ? '取消置顶' : '置顶'}
                           </button>
                           <button
-                            onClick={() => deleteChatMessage(msg.id)}
+                            onClick={() => setMsgToDelete(msg)}
                             className="hover:text-rose-600 flex items-center gap-0.5"
                           >
                             <Trash2 className="w-3 h-3" />
@@ -548,6 +550,20 @@ export const ChatModule: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Delete Message Modal */}
+      <ConfirmModal
+        isOpen={Boolean(msgToDelete)}
+        title="确认撤回/删除该条发言？"
+        message={`确定要删除 ${msgToDelete?.senderName} 发送的这条消息吗？`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (msgToDelete) {
+            await deleteChatMessage(msgToDelete.id);
+          }
+        }}
+        onClose={() => setMsgToDelete(null)}
+      />
     </div>
   );
 };

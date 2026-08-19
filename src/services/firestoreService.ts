@@ -72,11 +72,38 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
   const usersRef = collection(db, 'users');
   return onSnapshot(usersRef, (snapshot) => {
-    const users: UserProfile[] = [];
+    const rawUsers: UserProfile[] = [];
     snapshot.forEach((docSnap) => {
-      users.push(docSnap.data() as UserProfile);
+      rawUsers.push({ ...docSnap.data(), uid: docSnap.id } as UserProfile);
     });
-    callback(users);
+
+    // Deduplicate: Keep one super_admin and one per studentId
+    const uniqueUsersMap = new Map<string, UserProfile>();
+    let hasAdmin = false;
+
+    for (const u of rawUsers) {
+      const isAdmin = u.role === 'super_admin' || u.studentId === '20260001' || u.uid === 'admin_super_account' || u.email === 'lry674515314@gmail.com';
+      if (isAdmin) {
+        if (!hasAdmin) {
+          uniqueUsersMap.set('admin_super_account', {
+            ...u,
+            uid: 'admin_super_account',
+            role: 'super_admin',
+            studentId: '20260001',
+            name: u.name || '李班长 (超级管理员)',
+            email: u.email || 'lry674515314@gmail.com'
+          });
+          hasAdmin = true;
+        }
+      } else {
+        const key = u.studentId ? `student_${u.studentId}` : u.uid;
+        if (!uniqueUsersMap.has(key)) {
+          uniqueUsersMap.set(key, u);
+        }
+      }
+    }
+
+    callback(Array.from(uniqueUsersMap.values()));
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, 'users');
   });
@@ -95,12 +122,102 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
   }
 };
 
+export const getUserProfileByStudentId = async (studentId: string): Promise<UserProfile | null> => {
+  try {
+    // 1. Direct doc check student_{studentId} or {studentId}
+    const directDoc = await getDoc(doc(db, 'users', `student_${studentId}`));
+    if (directDoc.exists()) {
+      return directDoc.data() as UserProfile;
+    }
+    const rawDoc = await getDoc(doc(db, 'users', studentId));
+    if (rawDoc.exists()) {
+      return rawDoc.data() as UserProfile;
+    }
+    // 2. Query check
+    const q = query(collection(db, 'users'), where('studentId', '==', studentId));
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      return snap.docs[0].data() as UserProfile;
+    }
+    return null;
+  } catch (e) {
+    handleFirestoreError(e, OperationType.GET, 'users');
+    return null;
+  }
+};
+
 export const saveUserProfile = async (profile: UserProfile): Promise<void> => {
   try {
     await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
   } catch (e) {
     handleFirestoreError(e, OperationType.WRITE, `users/${profile.uid}`);
     throw e;
+  }
+};
+
+export const deleteUserDoc = async (uid: string): Promise<void> => {
+  try {
+    await deleteDoc(doc(db, 'users', uid));
+  } catch (e) {
+    handleFirestoreError(e, OperationType.DELETE, `users/${uid}`);
+    throw e;
+  }
+};
+
+export const cleanupDuplicateUsers = async (): Promise<number> => {
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    let cleanedCount = 0;
+    const seenStudentIds = new Set<string>();
+    let preservedAdminDocId: string | null = null;
+
+    const docs = snap.docs;
+    // Step 1: Handle Super Admin deduplication
+    for (const docSnap of docs) {
+      const data = docSnap.data() as UserProfile;
+      const docId = docSnap.id;
+      const isAdmin = data.role === 'super_admin' || data.studentId === '20260001' || data.email === 'lry674515314@gmail.com' || docId === 'admin_super_account';
+
+      if (isAdmin) {
+        if (!preservedAdminDocId) {
+          preservedAdminDocId = docId;
+          // Ensure canonical doc exists
+          await setDoc(doc(db, 'users', 'admin_super_account'), {
+            ...data,
+            uid: 'admin_super_account',
+            role: 'super_admin',
+            studentId: '20260001',
+            email: 'lry674515314@gmail.com',
+            name: data.name || '李班长 (超级管理员)',
+            bio: data.bio || '班级空间超级管理员 / 班长'
+          }, { merge: true });
+
+          if (docId !== 'admin_super_account') {
+            await deleteDoc(docSnap.ref);
+            cleanedCount++;
+          }
+        } else {
+          // Already have preserved admin, delete this duplicate
+          if (docId !== 'admin_super_account') {
+            await deleteDoc(docSnap.ref);
+            cleanedCount++;
+          }
+        }
+      } else if (data.studentId) {
+        // Step 2: Handle Student duplicates
+        if (seenStudentIds.has(data.studentId)) {
+          await deleteDoc(docSnap.ref);
+          cleanedCount++;
+        } else {
+          seenStudentIds.add(data.studentId);
+        }
+      }
+    }
+
+    return cleanedCount;
+  } catch (e) {
+    console.warn('cleanupDuplicateUsers error:', e);
+    return 0;
   }
 };
 

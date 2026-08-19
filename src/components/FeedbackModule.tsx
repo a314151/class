@@ -7,6 +7,7 @@ import {
   deleteFeedback 
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
+import { ConfirmModal } from './ConfirmModal';
 import { 
   Inbox, 
   Plus, 
@@ -38,6 +39,7 @@ export const FeedbackModule: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
+  const [feedbackToDelete, setFeedbackToDelete] = useState<FeedbackItem | null>(null);
 
   // New feedback
   const [title, setTitle] = useState('');
@@ -253,11 +255,7 @@ export const FeedbackModule: React.FC = () => {
                         处理/答复
                       </button>
                       <button
-                        onClick={() => {
-                          if (window.confirm('确定要删除此条反馈吗？')) {
-                            deleteFeedback(item.id);
-                          }
-                        }}
+                        onClick={() => setFeedbackToDelete(item)}
                         className="p-1 text-slate-400 hover:text-rose-600 rounded-md transition-colors"
                         title="删除反馈"
                       >
@@ -460,6 +458,20 @@ export const FeedbackModule: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Confirm Delete Modal */}
+      <ConfirmModal
+        isOpen={Boolean(feedbackToDelete)}
+        title="确认删除该条意见反馈？"
+        message={`确定要删除 "${feedbackToDelete?.title}" 吗？删除后此反馈和答复将从系统中清除。`}
+        confirmText="确认删除"
+        onConfirm={async () => {
+          if (feedbackToDelete) {
+            await deleteFeedback(feedbackToDelete.id);
+          }
+        }}
+        onClose={() => setFeedbackToDelete(null)}
+      />
     </div>
   );
 };
