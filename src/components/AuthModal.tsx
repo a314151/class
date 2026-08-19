@@ -22,7 +22,7 @@ const readableAuthError = (error: unknown): string => {
   return error instanceof Error ? error.message : '操作失败，请稍后重试';
 };
 
-const fieldClassName = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 dark:border-slate-700 dark:bg-slate-950';
+const fieldClassName = 'w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-950 caret-indigo-600 placeholder:text-slate-400 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/15 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:caret-indigo-400 dark:placeholder:text-slate-500';
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const { loginWithGoogle, loginWithStudentIdOrEmail, registerMember } = useAuth();
