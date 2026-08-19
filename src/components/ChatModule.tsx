@@ -35,6 +35,13 @@ const ROLE_BADGE: Record<UserRole, { label: string; style: string }> = {
   member: { label: '同学', style: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' }
 };
 
+const readableSendError = (error: unknown): string => {
+  const code = (error as { code?: string })?.code || '';
+  if (code.endsWith('permission-denied')) return '消息发送失败：当前账号没有发送权限，请重新登录后再试';
+  if (code.endsWith('unavailable')) return '消息发送失败：网络暂时不可用，请稍后重试';
+  return '消息发送失败，请检查网络后重试';
+};
+
 export const ChatModule: React.FC = () => {
   const { profile, isCommittee } = useAuth();
   const [chatMode, setChatMode] = useState<'public' | 'direct'>('public');
@@ -53,6 +60,8 @@ export const ChatModule: React.FC = () => {
   const [dmAttachment, setDmAttachment] = useState('');
   const [showDmUserDropdown, setShowDmUserDropdown] = useState(false);
   const [msgToDelete, setMsgToDelete] = useState<ChatMessage | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendingMode, setSendingMode] = useState<'public' | 'direct' | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const modeDropdownRef = useRef<HTMLDivElement>(null);
@@ -116,6 +125,8 @@ export const ChatModule: React.FC = () => {
     e.preventDefault();
     if ((!inputMsg.trim() && !attachmentUrl) || !profile) return;
 
+    setSendError(null);
+    setSendingMode('public');
     try {
       await sendChatMessage({
         senderUid: profile.uid,
@@ -130,6 +141,9 @@ export const ChatModule: React.FC = () => {
       setAttachmentUrl('');
     } catch (err) {
       console.error('Failed to send message:', err);
+      setSendError(readableSendError(err));
+    } finally {
+      setSendingMode(null);
     }
   };
 
@@ -138,6 +152,8 @@ export const ChatModule: React.FC = () => {
     e.preventDefault();
     if ((!dmInput.trim() && !dmAttachment) || !profile || !selectedDmUser) return;
 
+    setSendError(null);
+    setSendingMode('direct');
     try {
       const convoId = getConversationId(profile.uid, selectedDmUser.uid);
       await sendDirectMessage({
@@ -155,6 +171,9 @@ export const ChatModule: React.FC = () => {
       setDmAttachment('');
     } catch (err) {
       console.error('Failed to send DM:', err);
+      setSendError(readableSendError(err));
+    } finally {
+      setSendingMode(null);
     }
   };
 
@@ -231,6 +250,12 @@ export const ChatModule: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {sendError && (
+        <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+          {sendError}
+        </div>
+      )}
 
       {/* Main Chat Interface */}
       {chatMode === 'public' ? (
@@ -369,8 +394,9 @@ export const ChatModule: React.FC = () => {
 
               <button
                 type="submit"
-                disabled={!profile || (!inputMsg.trim() && !attachmentUrl)}
+                disabled={!profile || sendingMode !== null || (!inputMsg.trim() && !attachmentUrl)}
                 className="p-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl shadow-xs transition-colors"
+                aria-label={sendingMode === 'public' ? '正在发送消息' : '发送消息'}
               >
                 <Send className="w-3.5 h-3.5" />
               </button>
@@ -543,8 +569,9 @@ export const ChatModule: React.FC = () => {
               />
               <button
                 type="submit"
-                disabled={!dmInput.trim() && !dmAttachment}
+                disabled={sendingMode !== null || (!dmInput.trim() && !dmAttachment)}
                 className="p-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl shadow-xs transition-colors"
+                aria-label={sendingMode === 'direct' ? '正在发送私信' : '发送私信'}
               >
                 <Send className="w-3.5 h-3.5" />
               </button>

@@ -439,6 +439,12 @@ export const deleteSchoolEvent = async (id: string): Promise<void> => {
 };
 
 // ================= PUBLIC CHAT MESSAGES =================
+const omitUndefinedFields = <T extends object>(value: T): T => (
+  Object.fromEntries(
+    Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined)
+  ) as T
+);
+
 export const subscribeToChatMessages = (callback: (messages: ChatMessage[]) => void) => {
   const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'), limit(150));
   return onSnapshot(q, (snapshot) => {
@@ -454,7 +460,7 @@ export const subscribeToChatMessages = (callback: (messages: ChatMessage[]) => v
 
 export const sendChatMessage = async (msg: Omit<ChatMessage, 'id'>): Promise<string> => {
   try {
-    const docRef = await addDoc(collection(db, 'messages'), msg);
+    const docRef = await addDoc(collection(db, 'messages'), omitUndefinedFields(msg));
     return docRef.id;
   } catch (e) {
     handleFirestoreError(e, OperationType.CREATE, 'messages');
@@ -513,10 +519,10 @@ export const subscribeToDirectMessages = (
 
 export const sendDirectMessage = async (msg: Omit<DirectMessage, 'id'>): Promise<string> => {
   try {
-    const docRef = await addDoc(collection(db, 'directMessages'), {
+    const docRef = await addDoc(collection(db, 'directMessages'), omitUndefinedFields({
       ...msg,
       participantUids: Array.from(new Set([msg.senderUid, msg.recipientUid]))
-    });
+    }));
     return docRef.id;
   } catch (e) {
     handleFirestoreError(e, OperationType.CREATE, 'directMessages');
