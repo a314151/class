@@ -493,7 +493,8 @@ export const getConversationId = (uid1: string, uid2: string): string => {
 
 export const subscribeToDirectMessages = (
   conversationId: string, 
-  callback: (messages: DirectMessage[]) => void
+  callback: (messages: DirectMessage[]) => void,
+  onError?: (error: unknown) => void
 ) => {
   const currentUid = auth.currentUser?.uid;
   if (!currentUid) {
@@ -502,7 +503,8 @@ export const subscribeToDirectMessages = (
   }
   const q = query(
     collection(db, 'directMessages'),
-    where('participantUids', 'array-contains', currentUid)
+    where('participantUids', 'array-contains', currentUid),
+    limit(100)
   );
   return onSnapshot(q, (snapshot) => {
     const list: DirectMessage[] = [];
@@ -514,6 +516,7 @@ export const subscribeToDirectMessages = (
     callback(list.slice(-100));
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, `directMessages?conversationId=${conversationId}`);
+    onError?.(error);
   });
 };
 

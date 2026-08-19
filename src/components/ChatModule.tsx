@@ -42,6 +42,13 @@ const readableSendError = (error: unknown): string => {
   return '消息发送失败，请检查网络后重试';
 };
 
+const readableReceiveError = (error: unknown): string => {
+  const code = (error as { code?: string })?.code || '';
+  if (code.endsWith('permission-denied')) return '无法接收私聊：当前账号的私聊读取权限被拒绝，请联系管理员更新 Firestore 规则';
+  if (code.endsWith('unavailable')) return '无法接收私聊：网络暂时不可用，请稍后重试';
+  return '无法接收私聊，请刷新页面后重试';
+};
+
 const getMessagingUid = (user: UserProfile): string => (
   user.authUid?.trim() || user.uid.trim()
 );
@@ -107,10 +114,18 @@ export const ChatModule: React.FC = () => {
   useEffect(() => {
     if (chatMode !== 'direct' || !currentMessagingUid || !selectedDmUid) return;
     const convoId = getConversationId(currentMessagingUid, selectedDmUid);
-    const unsub = subscribeToDirectMessages(convoId, (data) => {
-      setDirectMessages(data);
-      setTimeout(scrollToBottom, 100);
-    });
+    const unsub = subscribeToDirectMessages(
+      convoId,
+      (data) => {
+        setDirectMessages(data);
+        setSendError(null);
+        setTimeout(scrollToBottom, 100);
+      },
+      (error) => {
+        setDirectMessages([]);
+        setSendError(readableReceiveError(error));
+      }
+    );
     return () => unsub();
   }, [chatMode, currentMessagingUid, selectedDmUid]);
 
