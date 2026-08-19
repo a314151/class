@@ -38,6 +38,31 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const AUTH_BOOT_TIMEOUT_MS = 8_000;
+const PROFILE_VERIFICATION_TIMEOUT_MS = 8_000;
+
+class AuthVerificationTimeoutError extends Error {
+  constructor() {
+    super('手机网络连接验证服务超时，请重新登录或切换网络后重试');
+    this.name = 'AuthVerificationTimeoutError';
+  }
+}
+
+const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> =>
+  new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new AuthVerificationTimeoutError()), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      }
+    );
+  });
+
 const ownerProfile = (user: User): UserProfile => ({
   uid: user.uid,
   authUid: user.uid,
@@ -92,7 +117,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         role: 'super_admin',
         studentId: '20260001'
       });
-      await saveUserProfile(canonical);
+      const needsCanonicalWrite = !existing
+        || existing.uid !== user.uid
+        || existing.authUid !== user.uid
+        || existing.role !== 'super_admin'
+        || existing.approved !== true
+        || existing.disabled === true
+        || Boolean(existing.passwordHash);
+      if (needsCanonicalWrite) {
+        await saveUserProfile(canonical);
+      }
       return canonical;
     }
 
@@ -115,14 +149,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return canonical;
   }, []);
 
+  const verifyAuthorizedProfile = useCallback(async (user: User): Promise<UserProfile> => {
+    const startedAt = performance.now();
+    console.info('[auth] access verification started', { providerCount: user.providerData.length });
+    try {
+      const authorizedProfile = await withTimeout<UserProfile>(
+        loadAuthorizedProfile(user),
+        PROFILE_VERIFICATION_TIMEOUT_MS
+      );
+      console.info('[auth] access verification completed', {
+        durationMs: Math.round(performance.now() - startedAt)
+      });
+      return authorizedProfile;
+    } catch (error) {
+      console.warn('[auth] access verification failed', {
+        durationMs: Math.round(performance.now() - startedAt),
+        reason: error instanceof Error ? error.name : 'UnknownError'
+      });
+      throw error;
+    }
+  }, [loadAuthorizedProfile]);
+
   useEffect(() => {
     let active = true;
+    let authRevision = 0;
     clearLegacyAccessCaches();
+
+    const bootTimeoutId = window.setTimeout(() => {
+      if (!active) return;
+      authRevision += 1;
+      console.warn('[auth] authentication observer timed out');
+      setAccessError('身份服务响应超时，请重新登录或切换网络后重试');
+      setCurrentUser(null);
+      setProfile(null);
+      setLoading(false);
+      void signOut(auth).catch(() => undefined);
+    }, AUTH_BOOT_TIMEOUT_MS);
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
-      setLoading(true);
-      setAccessError(null);
+      window.clearTimeout(bootTimeoutId);
+      const revision = ++authRevision;
 
       if (!user) {
         setCurrentUser(null);
@@ -131,32 +198,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
+      setLoading(true);
+      setAccessError(null);
+
       try {
-        const authorizedProfile = await loadAuthorizedProfile(user);
-        if (!active) return;
+        const authorizedProfile = await verifyAuthorizedProfile(user);
+        if (!active || revision !== authRevision) return;
         setCurrentUser(user);
         setProfile(authorizedProfile);
       } catch (error) {
-        if (!active) return;
+        if (!active || revision !== authRevision) return;
         const message = error instanceof Error ? error.message : '无法验证班级访问权限';
         setAccessError(message);
         setCurrentUser(null);
         setProfile(null);
         await signOut(auth).catch(() => undefined);
       } finally {
-        if (active) setLoading(false);
+        if (active && revision === authRevision) setLoading(false);
       }
     });
 
     return () => {
       active = false;
+      window.clearTimeout(bootTimeoutId);
       unsubscribe();
     };
-  }, [loadAuthorizedProfile]);
+  }, [verifyAuthorizedProfile]);
 
   const finishLogin = async (user: User) => {
     try {
-      const authorizedProfile = await loadAuthorizedProfile(user);
+      const authorizedProfile = await verifyAuthorizedProfile(user);
+      if (auth.currentUser?.uid !== user.uid) {
+        throw new Error('登录会话已失效，请重新登录');
+      }
       setAccessError(null);
       setCurrentUser(user);
       setProfile(authorizedProfile);

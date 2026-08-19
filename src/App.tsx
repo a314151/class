@@ -24,7 +24,7 @@ const ModuleFallback = () => (
 );
 
 function MainAppContent() {
-  const { currentUser, profile, loading, accessError, isSuperAdmin } = useAuth();
+  const { currentUser, profile, loading, accessError, isSuperAdmin, logout } = useAuth();
   const [activeTab, setActiveTab] = useState('notice');
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [dismissAnnouncement, setDismissAnnouncement] = useState(false);
@@ -47,6 +47,14 @@ function MainAppContent() {
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 gap-3">
         <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
         <p className="text-xs font-semibold">正在验证访问权限...</p>
+        <p className="text-[11px] text-slate-400">手机网络较慢时最多等待 8 秒，不会无限停留</p>
+        <button
+          type="button"
+          onClick={() => void logout().catch(() => window.location.reload())}
+          className="mt-2 rounded-xl border border-slate-300 px-4 py-2 text-xs font-bold text-slate-600 transition hover:bg-white dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-900"
+        >
+          取消验证并重新登录
+        </button>
       </div>
     );
   }
