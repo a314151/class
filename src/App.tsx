@@ -46,8 +46,8 @@ function MainAppContent() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-950 text-slate-600 dark:text-slate-400 gap-3">
         <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
-        <p className="text-xs font-semibold">正在验证访问权限...</p>
-        <p className="text-[11px] text-slate-400">手机网络较慢时最多等待 8 秒，不会无限停留</p>
+        <p className="text-xs font-semibold">正在通过班级服务验证访问权限...</p>
+        <p className="text-[11px] text-slate-400">手机无需连接 Google，验证超时后可直接重试</p>
         <button
           type="button"
           onClick={() => void logout().catch(() => window.location.reload())}

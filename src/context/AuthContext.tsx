@@ -1,19 +1,14 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import type { User } from 'firebase/auth';
-import {
-  auth,
-  createUserWithEmailAndPassword,
-  createManagedAuthUser,
-  deleteUser,
-  googleProvider,
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  signInWithPopup,
-  signOut
-} from '../firebase';
-import { getStudentAuthEmail, isOwnerGoogleUser, OWNER_EMAIL } from '../authConfig';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { isOwnerGoogleUser } from '../authConfig';
 import type { UserProfile, UserRole } from '../types';
-import { getUserProfile, saveUserProfile } from '../services/firestoreService';
+import { saveUserProfile } from '../services/firestoreService';
+import {
+  ApiError,
+  apiRequest,
+  postJson,
+  type AuthSession,
+  type SessionUser
+} from '../services/apiClient';
 
 interface ManagedMemberInput {
   studentId: string;
@@ -31,7 +26,7 @@ interface MemberRegistrationInput {
 }
 
 interface AuthContextType {
-  currentUser: User | null;
+  currentUser: SessionUser | null;
   profile: UserProfile | null;
   loading: boolean;
   accessError: string | null;
@@ -48,54 +43,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const AUTH_BOOT_TIMEOUT_MS = 8_000;
-const PROFILE_VERIFICATION_TIMEOUT_MS = 8_000;
-
-class AuthVerificationTimeoutError extends Error {
-  constructor() {
-    super('手机网络连接验证服务超时，请重新登录或切换网络后重试');
-    this.name = 'AuthVerificationTimeoutError';
-  }
-}
-
-const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number): Promise<T> =>
-  new Promise<T>((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => reject(new AuthVerificationTimeoutError()), timeoutMs);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timeoutId);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timeoutId);
-        reject(error);
-      }
-    );
-  });
-
-const ownerProfile = (user: User): UserProfile => ({
-  uid: user.uid,
-  authUid: user.uid,
-  name: user.displayName || '李班长（超级管理员）',
-  email: OWNER_EMAIL,
-  studentId: '20260001',
-  role: 'super_admin',
-  approved: true,
-  disabled: false,
-  avatar: user.photoURL || 'https://api.dicebear.com/7.x/bottts/svg?seed=class-owner',
-  birthday: '2008-01-01',
-  bio: '班级空间超级管理员 / 班长',
-  phone: '',
-  createdAt: new Date().toISOString()
-});
-
-const removeLegacySecrets = (profile: UserProfile): UserProfile => {
-  const clean = { ...profile } as UserProfile & { password?: string };
-  delete clean.passwordHash;
-  delete clean.password;
-  return clean;
-};
-
 const clearLegacyAccessCaches = () => {
   localStorage.removeItem('class_space_cached_profile');
   localStorage.removeItem('class_space_admin_override');
@@ -106,286 +53,104 @@ const clearLegacyAccessCaches = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentUser, setCurrentUser] = useState<SessionUser | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [accessError, setAccessError] = useState<string | null>(null);
-  const registrationInProgressRef = useRef(false);
 
-  const loadAuthorizedProfile = useCallback(async (user: User): Promise<UserProfile> => {
-    if (user.isAnonymous) {
-      throw new Error('匿名账号无权访问班级空间');
-    }
-
-    if (isOwnerGoogleUser(user)) {
-      const existing = await getUserProfile(user.uid);
-      const canonical = removeLegacySecrets({
-        ...ownerProfile(user),
-        ...(existing || {}),
-        uid: user.uid,
-        authUid: user.uid,
-        email: OWNER_EMAIL,
-        role: 'super_admin',
-        studentId: '20260001'
-      });
-      const needsCanonicalWrite = !existing
-        || existing.uid !== user.uid
-        || existing.authUid !== user.uid
-        || existing.role !== 'super_admin'
-        || existing.approved !== true
-        || existing.disabled === true
-        || Boolean(existing.passwordHash);
-      if (needsCanonicalWrite) {
-        await saveUserProfile(canonical);
-      }
-      return canonical;
-    }
-
-    const existing = await getUserProfile(user.uid);
-    if (!existing || existing.authUid !== user.uid) {
-      throw new Error('找不到与此登录账号匹配的注册申请');
-    }
-    if (existing.approved !== true && existing.disabled) {
-      throw new Error('注册申请未通过，请联系管理员核对姓名和学号');
-    }
-    if (existing.approved !== true) {
-      throw new Error('注册申请正在等待管理员审批，批准后即可登录');
-    }
-    if (existing.disabled) {
-      throw new Error('此账号的班级访问权限已被管理员撤销');
-    }
-
-    const canonical = removeLegacySecrets({
-      ...existing,
-      uid: user.uid,
-      authUid: user.uid,
-      role: existing.role === 'super_admin' ? 'member' : existing.role
-    });
-
-    if (existing.uid !== user.uid || existing.passwordHash) {
-      await saveUserProfile(canonical);
-    }
-
-    return canonical;
+  const applySession = useCallback((session: AuthSession) => {
+    setCurrentUser(session.user);
+    setProfile(session.profile);
+    setAccessError(null);
   }, []);
-
-  const verifyAuthorizedProfile = useCallback(async (user: User): Promise<UserProfile> => {
-    const startedAt = performance.now();
-    console.info('[auth] access verification started', { providerCount: user.providerData.length });
-    try {
-      const authorizedProfile = await withTimeout<UserProfile>(
-        loadAuthorizedProfile(user),
-        PROFILE_VERIFICATION_TIMEOUT_MS
-      );
-      console.info('[auth] access verification completed', {
-        durationMs: Math.round(performance.now() - startedAt)
-      });
-      return authorizedProfile;
-    } catch (error) {
-      console.warn('[auth] access verification failed', {
-        durationMs: Math.round(performance.now() - startedAt),
-        reason: error instanceof Error ? error.name : 'UnknownError'
-      });
-      throw error;
-    }
-  }, [loadAuthorizedProfile]);
 
   useEffect(() => {
     let active = true;
-    let authRevision = 0;
     clearLegacyAccessCaches();
 
-    const bootTimeoutId = window.setTimeout(() => {
-      if (!active) return;
-      authRevision += 1;
-      console.warn('[auth] authentication observer timed out');
-      setAccessError('身份服务响应超时，请重新登录或切换网络后重试');
-      setCurrentUser(null);
-      setProfile(null);
-      setLoading(false);
-      void signOut(auth).catch(() => undefined);
-    }, AUTH_BOOT_TIMEOUT_MS);
-
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!active) return;
-      window.clearTimeout(bootTimeoutId);
-      const revision = ++authRevision;
-
-      if (user && registrationInProgressRef.current) {
-        setCurrentUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-
-      if (!user) {
-        setCurrentUser(null);
-        setProfile(null);
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-      setAccessError(null);
-
+    const restoreSession = async () => {
       try {
-        const authorizedProfile = await verifyAuthorizedProfile(user);
-        if (!active || revision !== authRevision) return;
-        setCurrentUser(user);
-        setProfile(authorizedProfile);
+        const session = await apiRequest<AuthSession>('/api/auth/session', {}, 12_000);
+        if (active) applySession(session);
       } catch (error) {
-        if (!active || revision !== authRevision) return;
-        const message = error instanceof Error ? error.message : '无法验证班级访问权限';
-        setAccessError(message);
+        if (!active) return;
         setCurrentUser(null);
         setProfile(null);
-        await signOut(auth).catch(() => undefined);
+        if (!(error instanceof ApiError) || error.status !== 401) {
+          setAccessError(error instanceof Error ? error.message : '无法验证班级访问权限');
+        }
       } finally {
-        if (active && revision === authRevision) setLoading(false);
+        if (active) setLoading(false);
       }
-    });
+    };
 
+    void restoreSession();
     return () => {
       active = false;
-      window.clearTimeout(bootTimeoutId);
-      unsubscribe();
     };
-  }, [verifyAuthorizedProfile]);
-
-  const finishLogin = async (user: User) => {
-    try {
-      const authorizedProfile = await verifyAuthorizedProfile(user);
-      if (auth.currentUser?.uid !== user.uid) {
-        throw new Error('登录会话已失效，请重新登录');
-      }
-      setAccessError(null);
-      setCurrentUser(user);
-      setProfile(authorizedProfile);
-    } catch (error) {
-      await signOut(auth).catch(() => undefined);
-      setCurrentUser(null);
-      setProfile(null);
-      throw error;
-    }
-  };
-
-  const loginWithGoogle = async () => {
-    const result = await signInWithPopup(auth, googleProvider);
-    await finishLogin(result.user);
-  };
+  }, [applySession]);
 
   const loginWithStudentIdOrEmail = async (accountRaw: string, password: string) => {
-    const account = accountRaw.trim();
-    if (!account || !password) {
-      throw new Error('请输入学号和密码');
-    }
-    if (account.includes('@')) {
+    const studentId = accountRaw.trim().toLowerCase();
+    if (!studentId || !password) throw new Error('请输入学号和密码');
+    if (studentId.includes('@')) {
       throw new Error('成员请使用学号登录；管理员请使用下方 Google 登录');
     }
-
-    const result = await signInWithEmailAndPassword(
-      auth,
-      getStudentAuthEmail(account),
-      password
-    );
-    await finishLogin(result.user);
+    const session = await postJson<AuthSession>('/api/auth/login', { studentId, password }, 20_000);
+    applySession(session);
   };
 
   const registerMember = async (input: MemberRegistrationInput): Promise<void> => {
     const studentId = input.studentId.trim().toLowerCase();
     const name = input.name.trim();
     const email = input.email?.trim().toLowerCase() || '';
-
     if (!/^[a-z0-9_-]{2,32}$/.test(studentId)) {
       throw new Error('学号需为 2-32 位字母、数字、下划线或短横线');
     }
-    if (!name || name.length > 40) {
-      throw new Error('请输入 1-40 个字的真实姓名');
-    }
-    if (input.password.length < 8) {
-      throw new Error('密码至少需要 8 位');
-    }
-
-    registrationInProgressRef.current = true;
-    setAccessError(null);
-    let createdUser: User | null = null;
-
-    try {
-      const credential = await createUserWithEmailAndPassword(
-        auth,
-        getStudentAuthEmail(studentId),
-        input.password
-      );
-      createdUser = credential.user;
-      await saveUserProfile({
-        uid: createdUser.uid,
-        authUid: createdUser.uid,
-        name,
-        email,
-        studentId,
-        role: 'member',
-        approved: false,
-        disabled: false,
-        avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=applicant_${encodeURIComponent(studentId)}`,
-        bio: '等待管理员审批',
-        createdAt: new Date().toISOString()
-      });
-    } catch (error) {
-      if (createdUser) {
-        await deleteUser(createdUser).catch(async () => {
-          await signOut(auth).catch(() => undefined);
-        });
-      }
-      throw error;
-    } finally {
-      registrationInProgressRef.current = false;
-    }
-
-    await signOut(auth).catch(() => undefined);
+    if (!name || name.length > 40) throw new Error('请输入 1-40 个字的真实姓名');
+    if (input.password.length < 8) throw new Error('密码至少需要 8 位');
+    await postJson<{ registered: boolean }>('/api/auth/register', {
+      studentId,
+      name,
+      email,
+      password: input.password
+    }, 20_000);
     setCurrentUser(null);
     setProfile(null);
-    setLoading(false);
+    setAccessError(null);
+  };
+
+  const loginWithGoogle = async () => {
+    // Ordinary phones never load this browser SDK; it is only needed for the owner login button.
+    const firebase = await import('../firebase');
+    const result = await firebase.signInWithPopup(firebase.auth, firebase.googleProvider);
+    try {
+      const idToken = await result.user.getIdToken();
+      const session = await postJson<AuthSession>('/api/auth/firebase-session', {
+        idToken,
+        refreshToken: result.user.refreshToken
+      }, 20_000);
+      applySession(session);
+    } finally {
+      await firebase.signOut(firebase.auth).catch(() => undefined);
+    }
   };
 
   const createManagedMember = async (input: ManagedMemberInput): Promise<UserProfile> => {
-    if (!isOwnerGoogleUser(currentUser)) {
+    if (!isOwnerGoogleUser(currentUser) || profile?.role !== 'super_admin') {
       throw new Error('只有已验证的超级管理员可以创建成员账号');
     }
-
-    const studentId = input.studentId.trim();
-    const name = input.name.trim();
-    const email = input.email?.trim().toLowerCase() || `${studentId}@class.local`;
-    if (!studentId || !name || !input.password) {
-      throw new Error('请完整填写学号、姓名和初始密码');
-    }
-    if (input.password.length < 8) {
-      throw new Error('初始密码至少需要 8 位');
-    }
-
-    const authUser = await createManagedAuthUser(studentId, input.password);
-    const memberProfile: UserProfile = {
-      uid: authUser.uid,
-      authUid: authUser.uid,
-      name,
-      email,
-      studentId,
-      role: input.role,
-      approved: true,
-      disabled: false,
-      avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=student_${encodeURIComponent(studentId)}`,
-      birthday: '2008-06-15',
-      bio: '班级成员',
-      createdAt: new Date().toISOString()
-    };
-    await saveUserProfile(memberProfile);
-    return memberProfile;
+    return postJson<UserProfile>('/api/auth/managed-user', {
+      studentId: input.studentId,
+      name: input.name,
+      email: input.email || '',
+      password: input.password,
+      role: input.role
+    }, 20_000);
   };
 
   const updateMyProfile = async (data: Partial<UserProfile>) => {
-    if (!profile) {
-      throw new Error('当前未登录');
-    }
-
+    if (!profile) throw new Error('当前未登录');
     const allowed: Partial<UserProfile> = {
       name: data.name,
       avatar: data.avatar,
@@ -398,18 +163,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         delete allowed[key as keyof UserProfile];
       }
     });
-
     const updated = { ...profile, ...allowed };
     await saveUserProfile(updated);
     setProfile(updated);
   };
 
   const logout = async () => {
-    await signOut(auth);
-    clearLegacyAccessCaches();
-    setCurrentUser(null);
-    setProfile(null);
-    setAccessError(null);
+    try {
+      await postJson<{ loggedOut: boolean }>('/api/auth/logout', {});
+    } finally {
+      clearLegacyAccessCaches();
+      setCurrentUser(null);
+      setProfile(null);
+      setAccessError(null);
+    }
   };
 
   const isSuperAdmin = isOwnerGoogleUser(currentUser) && profile?.role === 'super_admin';
@@ -434,9 +201,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 };
 

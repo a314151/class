@@ -2,7 +2,10 @@
 
 ## 访问模型
 
-- 未登录用户不会挂载业务模块，也不会订阅 Firestore 数据。
+- 未登录用户不会挂载业务模块，也不会请求班级数据。
+- 普通浏览器只访问本站 `/api/*`；Cloudflare Worker 代为连接 Firebase，手机端不再直接访问 Google Firebase 接口。
+- Worker 将 Firebase ID token 与 refresh token 保存在 `HttpOnly`、`SameSite=Lax` 会话 Cookie 中，前端脚本无法读取；跨站写请求会被拒绝。
+- Worker 仍使用当前用户的 Firebase 身份访问 Firestore，所有请求继续受 `firestore.rules` 约束，代理本身不会获得管理员特权。
 - 超级管理员必须用已验证的指定 Google 账号登录；浏览器缓存、用户资料中的角色字段和本地口令都不能授予管理员权限。
 - 成员必须同时满足：Firebase Auth 登录成功、`users/{authUid}` 资料存在、`approved == true`、`disabled != true`。
 - 新成员可以用学号和密码提交自助注册申请，但只能创建自己的 `member` 待审资料（`approved == false`）。
@@ -21,6 +24,10 @@ npx firebase-tools deploy --only firestore
 ```
 
 项目和命名数据库已经写入 `.firebaserc` 与 `firebase.json`。发布完成前，线上 Firestore 仍使用旧规则，不能视为已完成访问隔离。
+
+## Cloudflare 发布
+
+`wrangler.jsonc` 已配置 Worker 入口和静态资源。Cloudflare Git 构建仍使用 `bun run build`，部署命令继续使用 `npx wrangler versions upload`；不需要新增明文密钥或构建变量。Firebase Web API key 只是公开的项目标识，实际访问权限由用户身份令牌和 Firestore 规则共同决定。
 
 ## 管理员上线检查
 

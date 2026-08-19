@@ -21,6 +21,8 @@ const readableAuthError = (error: unknown): string => {
   if (code === 'auth/popup-closed-by-user') return '已取消 Google 登录';
   if (code === 'auth/popup-blocked') return '浏览器拦截了登录窗口，请允许弹窗后重试';
   if (code === 'auth/network-request-failed') return '网络连接失败，请检查网络后重试';
+  if (code === 'IDENTITY_UNAVAILABLE') return '班级身份服务暂时不可用，请稍后重试';
+  if (code === 'API_TIMEOUT') return '班级服务响应超时，请切换网络后重试';
   return error instanceof Error ? error.message : '操作失败，请稍后重试';
 };
 
