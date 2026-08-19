@@ -10,9 +10,7 @@ import {
   updateProfile,
   sendPasswordResetEmail
 } from 'firebase/auth';
-import { 
-  getFirestore
-} from 'firebase/firestore';
+import { initializeFirestore } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 import { getStudentAuthEmail } from './authConfig';
 
@@ -22,10 +20,17 @@ export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
-// Initialize Firestore with custom databaseId if configured
-export const db = firebaseConfig.firestoreDatabaseId 
-  ? getFirestore(app, firebaseConfig.firestoreDatabaseId) 
-  : getFirestore(app);
+// Some mobile carriers and in-app browsers buffer Firestore's streaming transport
+// indefinitely. Long polling trades a little throughput for predictable responses
+// on coarse-pointer mobile devices while desktop clients keep the default transport.
+const shouldUseMobileLongPolling = typeof window !== 'undefined'
+  && window.matchMedia('(pointer: coarse)').matches;
+
+export const db = initializeFirestore(
+  app,
+  shouldUseMobileLongPolling ? { experimentalForceLongPolling: true } : {},
+  firebaseConfig.firestoreDatabaseId || undefined
+);
 
 export const createManagedAuthUser = async (studentId: string, password: string) => {
   const secondaryApp = initializeApp(
