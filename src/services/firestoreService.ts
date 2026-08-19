@@ -78,16 +78,9 @@ export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as UserProfile;
-      const profile = { ...data, uid: data.uid || docSnap.id };
-      const isAdmin = profile.role === 'super_admin'
-        || profile.studentId === '20260001'
-        || profile.uid === 'admin_super_account'
-        || profile.email?.toLowerCase() === 'lry674515314@gmail.com';
-      const logicalKey = isAdmin
-        ? 'admin_super_account'
-        : profile.studentId?.trim() || profile.uid;
-      const canonicalId = isAdmin ? 'admin_super_account' : profile.uid;
-      const isCanonicalDocument = docSnap.id === canonicalId;
+      const profile = { ...data, uid: data.uid || docSnap.id, profileDocId: docSnap.id };
+      const logicalKey = profile.studentId?.trim() || profile.authUid || profile.uid;
+      const isCanonicalDocument = Boolean(profile.authUid) && docSnap.id === profile.authUid;
       const existing = uniqueUsersMap.get(logicalKey);
 
       if (!existing) {
@@ -104,19 +97,7 @@ export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
       });
     });
 
-    callback(Array.from(uniqueUsersMap.entries()).map(([key, entry]) => {
-      if (key === 'admin_super_account') {
-        return {
-            ...entry.profile,
-            uid: 'admin_super_account',
-            role: 'super_admin',
-            studentId: '20260001',
-            name: entry.profile.name || '李班长 (超级管理员)',
-            email: entry.profile.email || 'lry674515314@gmail.com'
-          };
-      }
-      return entry.profile;
-    }));
+    callback(Array.from(uniqueUsersMap.values()).map((entry) => entry.profile));
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, 'users');
   });
@@ -124,28 +105,16 @@ export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
 
 export const getUserProfile = async (uid: string): Promise<UserProfile | null> => {
   try {
-    const [userDoc, studentDoc] = await Promise.all([
-      getDoc(doc(db, 'users', uid)),
-      getDoc(doc(db, 'users', `student_${uid}`))
-    ]);
+    const userDoc = await getDoc(doc(db, 'users', uid));
     if (userDoc.exists()) {
-      return userDoc.data() as UserProfile;
-    }
-    if (studentDoc.exists()) {
-      return studentDoc.data() as UserProfile;
+      return { ...userDoc.data(), uid: (userDoc.data() as UserProfile).uid || userDoc.id } as UserProfile;
     }
 
     const qAuth = query(collection(db, 'users'), where('authUid', '==', uid));
-    const qUid = query(collection(db, 'users'), where('uid', '==', uid));
-    const [snapAuth, snapUid] = await Promise.all([
-      getDocs(qAuth),
-      getDocs(qUid)
-    ]);
+    const snapAuth = await getDocs(qAuth);
     if (!snapAuth.empty) {
-      return snapAuth.docs[0].data() as UserProfile;
-    }
-    if (!snapUid.empty) {
-      return snapUid.docs[0].data() as UserProfile;
+      const match = snapAuth.docs[0];
+      return { ...match.data(), uid: (match.data() as UserProfile).uid || match.id } as UserProfile;
     }
     return null;
   } catch (e) {
@@ -331,11 +300,7 @@ export const cleanupDuplicateUsers = async (): Promise<number> => {
 
 export const updateUserRole = async (uid: string, newRole: UserRole): Promise<void> => {
   try {
-    const profile = await getUserProfile(uid);
-    if (!profile) {
-      throw new Error(`User profile not found: ${uid}`);
-    }
-    await saveUserProfile({ ...profile, role: newRole });
+    await updateDoc(doc(db, 'users', uid), { role: newRole });
   } catch (e) {
     handleFirestoreError(e, OperationType.UPDATE, `users/${uid}`);
     throw e;
@@ -524,18 +489,23 @@ export const subscribeToDirectMessages = (
   conversationId: string, 
   callback: (messages: DirectMessage[]) => void
 ) => {
+  const currentUid = auth.currentUser?.uid;
+  if (!currentUid) {
+    callback([]);
+    return () => undefined;
+  }
   const q = query(
     collection(db, 'directMessages'),
-    where('conversationId', '==', conversationId),
-    orderBy('createdAt', 'desc'),
-    limit(100)
+    where('participantUids', 'array-contains', currentUid)
   );
   return onSnapshot(q, (snapshot) => {
     const list: DirectMessage[] = [];
     snapshot.forEach((d) => {
-      list.push({ id: d.id, ...d.data() } as DirectMessage);
+      const message = { id: d.id, ...d.data() } as DirectMessage;
+      if (message.conversationId === conversationId) list.push(message);
     });
-    callback(list.reverse());
+    list.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    callback(list.slice(-100));
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, `directMessages?conversationId=${conversationId}`);
   });
@@ -543,7 +513,10 @@ export const subscribeToDirectMessages = (
 
 export const sendDirectMessage = async (msg: Omit<DirectMessage, 'id'>): Promise<string> => {
   try {
-    const docRef = await addDoc(collection(db, 'directMessages'), msg);
+    const docRef = await addDoc(collection(db, 'directMessages'), {
+      ...msg,
+      participantUids: Array.from(new Set([msg.senderUid, msg.recipientUid]))
+    });
     return docRef.id;
   } catch (e) {
     handleFirestoreError(e, OperationType.CREATE, 'directMessages');
@@ -573,6 +546,33 @@ export const sendBirthdayWish = async (wish: Omit<BirthdayWish, 'id'>): Promise<
     handleFirestoreError(e, OperationType.CREATE, 'birthdayWishes');
     throw e;
   }
+};
+
+export const setUserAccessDisabled = async (uid: string, disabled: boolean): Promise<void> => {
+  try {
+    await updateDoc(doc(db, 'users', uid), { disabled });
+  } catch (e) {
+    handleFirestoreError(e, OperationType.UPDATE, `users/${uid}`);
+    throw e;
+  }
+};
+
+export const approveUserAccess = async (uid: string): Promise<void> => {
+  try {
+    await updateDoc(doc(db, 'users', uid), { approved: true, disabled: false });
+  } catch (e) {
+    handleFirestoreError(e, OperationType.UPDATE, `users/${uid}`);
+    throw e;
+  }
+};
+
+export const subscribeToAdminDirectMessages = (callback: (messages: DirectMessage[]) => void) => {
+  const q = query(collection(db, 'directMessages'), orderBy('createdAt', 'desc'), limit(200));
+  return onSnapshot(q, (snapshot) => {
+    callback(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as DirectMessage)));
+  }, (error) => {
+    handleFirestoreError(error, OperationType.GET, 'directMessages/admin-debug');
+  });
 };
 
 export const updateBirthdayWish = async (id: string, message: string): Promise<void> => {
@@ -779,60 +779,26 @@ export const deleteFeedback = async (id: string): Promise<void> => {
 
 // ================= CLASS SETTINGS =================
 export const subscribeToSettings = (callback: (settings: ClassSettings) => void) => {
-  // First load from localStorage if available for zero-latency UI
-  const cached = localStorage.getItem('class_space_cached_settings');
-  if (cached) {
-    try {
-      callback(JSON.parse(cached));
-    } catch (e) {}
-  }
-
   return onSnapshot(doc(db, 'settings', 'general'), (docSnap) => {
     if (docSnap.exists()) {
       const data = docSnap.data() as ClassSettings;
-      localStorage.setItem('class_space_cached_settings', JSON.stringify(data));
       callback(data);
     } else {
-      const cached = localStorage.getItem('class_space_cached_settings');
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          callback(parsed);
-          return;
-        } catch (e) {}
-      }
       const defaultSettings: ClassSettings = {
-        className: '高三 (1) 班 · 卓越空间',
-        motto: '博学笃行，求是拓新，追光而行',
-        semester: '2026年 春季学期',
-        announcement: '欢迎来到班级空间！期中模拟考与研学报名正在进行中，请及时查看通知与提交表格。',
-        cloudflareWorkerUrl: 'https://class-space-worker.pages.dev/api/upload',
-        r2BucketName: 'class-space-assets'
+        className: '班级空间',
+        motto: '',
+        semester: '',
+        announcement: ''
       };
-      localStorage.setItem('class_space_cached_settings', JSON.stringify(defaultSettings));
       callback(defaultSettings);
     }
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, 'settings/general');
-    const cached = localStorage.getItem('class_space_cached_settings');
-    if (cached) {
-      try {
-        callback(JSON.parse(cached));
-      } catch (e) {}
-    }
   });
 };
 
 export const saveSettings = async (settings: Partial<ClassSettings>): Promise<void> => {
   try {
-    const currentCached = localStorage.getItem('class_space_cached_settings');
-    let merged = settings;
-    if (currentCached) {
-      try {
-        merged = { ...JSON.parse(currentCached), ...settings };
-      } catch (e) {}
-    }
-    localStorage.setItem('class_space_cached_settings', JSON.stringify(merged));
     await setDoc(doc(db, 'settings', 'general'), settings, { merge: true });
   } catch (e) {
     handleFirestoreError(e, OperationType.WRITE, 'settings/general');

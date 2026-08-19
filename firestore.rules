@@ -1,82 +1,183 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Helper functions
-    function isAuthenticated() {
+    function signedIn() {
       return request.auth != null;
     }
 
-    // Users collection: readable by all, writable by authenticated or self
+    // The owner is an administrator only after a verified Google sign-in.
+    // A forged local profile, a matching email/password account, or browser
+    // localStorage can never grant this privilege.
+    function isOwnerAdmin() {
+      return signedIn()
+        && request.auth.token.email == 'lry674515314@gmail.com'
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function hasMemberProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.authUid == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.approved == true
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.disabled != true;
+    }
+
+    function isMember() {
+      return isOwnerAdmin() || hasMemberProfile();
+    }
+
+    function isCommittee() {
+      return isOwnerAdmin()
+        || (hasMemberProfile()
+          && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'committee');
+    }
+
+    function legacyRawProfileMatches() {
+      let studentId = request.resource.data.studentId;
+      return exists(/databases/$(database)/documents/users/$(studentId))
+        && get(/databases/$(database)/documents/users/$(studentId)).data.authUid == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(studentId)).data.approved == true
+        && get(/databases/$(database)/documents/users/$(studentId)).data.studentId == studentId
+        && get(/databases/$(database)/documents/users/$(studentId)).data.role == request.resource.data.role;
+    }
+
+    function legacyPrefixedProfileMatches() {
+      let studentId = request.resource.data.studentId;
+      let legacyId = 'student_' + studentId;
+      return exists(/databases/$(database)/documents/users/$(legacyId))
+        && get(/databases/$(database)/documents/users/$(legacyId)).data.authUid == request.auth.uid
+        && get(/databases/$(database)/documents/users/$(legacyId)).data.approved == true
+        && get(/databases/$(database)/documents/users/$(legacyId)).data.studentId == studentId
+        && get(/databases/$(database)/documents/users/$(legacyId)).data.role == request.resource.data.role;
+    }
+
+    function validSelfMigration(userId) {
+      return signedIn()
+        && userId == request.auth.uid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.approved == true
+        && request.resource.data.role in ['member', 'committee']
+        && !request.resource.data.keys().hasAny(['password', 'passwordHash'])
+        && (legacyRawProfileMatches() || legacyPrefixedProfileMatches());
+    }
+
     match /users/{userId} {
-      allow read: if true;
-      allow write: if true;
+      // Before a legacy profile is migrated, an authenticated user may query
+      // only the profile already linked to their Firebase Auth UID.
+      allow get: if isOwnerAdmin()
+        || (signedIn() && userId == request.auth.uid)
+        || (signedIn() && resource.data.authUid == request.auth.uid);
+      allow list: if isMember()
+        || (signedIn() && resource.data.authUid == request.auth.uid);
+
+      allow create: if (isOwnerAdmin()
+          && (request.resource.data.role != 'super_admin' || userId == request.auth.uid))
+        || validSelfMigration(userId);
+      allow update: if (isOwnerAdmin()
+          && (request.resource.data.role != 'super_admin' || userId == request.auth.uid))
+        || (hasMemberProfile()
+          && userId == request.auth.uid
+          && resource.data.authUid == request.auth.uid
+          && request.resource.data.authUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['name', 'avatar', 'birthday', 'phone', 'bio']));
+      allow delete: if isOwnerAdmin();
     }
 
-    // Notices: readable by all, writable by authenticated or committee/admin
     match /notices/{noticeId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow create, delete: if isCommittee();
+      allow update: if isCommittee()
+        || (isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']));
     }
 
-    // Schedules: readable by all, writable by authenticated
     match /schedules/{scheduleId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow write: if isCommittee();
     }
 
-    // School Events: readable by all, writable by authenticated
     match /schoolEvents/{eventId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow write: if isCommittee();
     }
 
-    // Public Class Chat: readable by all, writable by authenticated
     match /messages/{messageId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.senderUid == request.auth.uid;
+      allow update: if isCommittee();
+      allow delete: if isCommittee()
+        || (hasMemberProfile() && resource.data.senderUid == request.auth.uid);
     }
 
-    // Direct Messages: readable and writable
-    match /directMessages/{dmId} {
-      allow read: if true;
-      allow write: if true;
+    match /directMessages/{messageId} {
+      allow read: if isOwnerAdmin()
+        || (hasMemberProfile()
+          && resource.data.participantUids is list
+          && resource.data.participantUids.hasAny([request.auth.uid]));
+      allow create: if hasMemberProfile()
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.recipientUid != request.auth.uid
+        && request.resource.data.participantUids is list
+        && request.resource.data.participantUids.size() == 2
+        && request.resource.data.participantUids.hasAll([
+          request.resource.data.senderUid,
+          request.resource.data.recipientUid
+        ]);
+      allow update, delete: if isOwnerAdmin();
     }
 
-    // Birthday Wishes: readable by all, writable by authenticated
     match /birthdayWishes/{wishId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.senderUid == request.auth.uid;
+      allow update: if isOwnerAdmin()
+        || (hasMemberProfile()
+          && resource.data.senderUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['message', 'updatedAt']))
+        || (isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes']));
+      allow delete: if isCommittee()
+        || (hasMemberProfile() && resource.data.senderUid == request.auth.uid);
     }
 
-    // Polls: readable by all, writable by authenticated
     match /polls/{pollId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow create, delete: if isCommittee();
+      allow update: if isCommittee()
+        || (isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['options']));
     }
 
-    // Forms: readable by all, writable by authenticated
     match /forms/{formId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow create, delete: if isCommittee();
+      allow update: if isCommittee()
+        || (isMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['submissions']));
     }
 
-    // Feedback: readable by all, writable by authenticated
     match /feedbacks/{feedbackId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isCommittee();
+      allow delete: if isCommittee()
+        || (hasMemberProfile() && resource.data.authorUid == request.auth.uid);
     }
 
-    // Settings: readable by all, writable by authenticated
     match /settings/{settingId} {
-      allow read: if true;
-      allow write: if true;
+      allow read: if isMember();
+      allow write: if isOwnerAdmin();
     }
 
-    // System flags
     match /system/{systemId} {
-      allow read: if true;
-      allow write: if true;
+      allow read, write: if isOwnerAdmin();
+    }
+
+    // Everything not explicitly listed is private, including future collections.
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }
-
