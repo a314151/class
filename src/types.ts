@@ -30,6 +30,7 @@ export interface Notice {
   authorUid: string;
   readBy: string[]; // array of user UIDs
   createdAt: string;
+  deadlineAt?: string; // ISO timestamp; displayed in Asia/Shanghai
   attachmentUrl?: string;
   attachmentName?: string;
 }
@@ -51,9 +52,25 @@ export interface SchoolEvent {
   id: string;
   title: string;
   date: string; // YYYY-MM-DD
+  startsAt?: string; // optional ISO timestamp for an exact start time
   category: SchoolEventCategory;
   description: string;
   location?: string;
+}
+
+export type CalendarEntryCategory = SchoolEventCategory | 'notice';
+
+export interface CalendarEntry {
+  id: string;
+  source: 'schoolEvent' | 'notice';
+  title: string;
+  date: string; // YYYY-MM-DD in Asia/Shanghai
+  startsAt?: string;
+  category: CalendarEntryCategory;
+  description: string;
+  location?: string;
+  noticeId?: string;
+  deadlineAt?: string;
 }
 
 export interface ChatMessage {

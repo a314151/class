@@ -1,41 +1,78 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { SchoolEvent, SchoolEventCategory } from '../types';
-import { 
-  subscribeToSchoolEvents, 
-  addSchoolEvent, 
-  deleteSchoolEvent 
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type {
+  CalendarEntry,
+  CalendarEntryCategory,
+  ClassSettings,
+  Notice,
+  SchoolEvent,
+  SchoolEventCategory
+} from '../types';
+import {
+  addSchoolEvent,
+  deleteSchoolEvent,
+  subscribeToNotices,
+  subscribeToSchoolEvents
 } from '../services/firestoreService';
 import { useAuth } from '../context/AuthContext';
 import { ConfirmModal } from './ConfirmModal';
-import { 
-  Calendar as CalendarIcon, 
-  Plus, 
-  Trash2, 
-  MapPin, 
-  Clock, 
-  Filter,
+import {
+  CalendarSharePoster,
+  PosterExportHost,
+  type PosterExportJob
+} from './SharePosters';
+import { buildCalendarEntries, getUpcomingEntries } from '../lib/calendarEntries';
+import {
+  formatCountdown,
+  formatShanghaiDateTime,
+  getShanghaiDate,
+  shanghaiDateToEndMs,
+  shanghaiLocalInputToIso
+} from '../lib/dateTime';
+import {
+  Calendar as CalendarIcon,
   ChevronDown,
+  Clock,
+  Filter,
+  MapPin,
+  Plus,
+  Share2,
+  Sparkles,
+  Trash2,
   X
 } from 'lucide-react';
 
-const EVENT_TYPE_MAP: Record<SchoolEventCategory, { label: string; badge: string }> = {
+const EVENT_TYPE_MAP: Record<CalendarEntryCategory, { label: string; badge: string }> = {
   holiday: { label: '法定节假', badge: 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' },
   exam: { label: '统考测评', badge: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300' },
   activity: { label: '校园活动', badge: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300' },
   academic: { label: '学术教研', badge: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300' },
+  notice: { label: '通知 DDL', badge: 'bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' }
 };
 
-export const CalendarModule: React.FC = () => {
+const SCHOOL_EVENT_OPTIONS: SchoolEventCategory[] = ['holiday', 'exam', 'activity', 'academic'];
+const AiImportModal = React.lazy(() => import('./AiImportModal').then((module) => ({ default: module.AiImportModal })));
+
+interface CalendarModuleProps {
+  settings: ClassSettings;
+}
+
+export const CalendarModule: React.FC<CalendarModuleProps> = ({ settings }) => {
   const { isCommittee } = useAuth();
   const [events, setEvents] = useState<SchoolEvent[]>([]);
+  const [notices, setNotices] = useState<Notice[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [eventToDelete, setEventToDelete] = useState<SchoolEvent | null>(null);
+  const [showAiImport, setShowAiImport] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<CalendarEntry | null>(null);
+  const [posterJob, setPosterJob] = useState<PosterExportJob | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [shareMessage, setShareMessage] = useState('');
+  const [now, setNow] = useState(() => Date.now());
 
-  // New Event Form
   const [title, setTitle] = useState('');
   const [date, setDate] = useState('');
+  const [startsAtLocal, setStartsAtLocal] = useState('');
   const [category, setCategory] = useState<SchoolEventCategory>('activity');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
@@ -43,14 +80,14 @@ export const CalendarModule: React.FC = () => {
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => subscribeToSchoolEvents(setEvents), []);
+  useEffect(() => subscribeToNotices(setNotices), []);
+
   useEffect(() => {
-    const unsub = subscribeToSchoolEvents((data) => {
-      setEvents(data);
-    });
-    return () => unsub();
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  // Close dropdown on click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -61,326 +98,178 @@ export const CalendarModule: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleAddEvent = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim() || !date) return;
+  const entries = useMemo(() => buildCalendarEntries(events, notices), [events, notices]);
+  const filteredEvents = selectedCategory === 'all'
+    ? entries
+    : entries.filter((event) => event.category === selectedCategory);
 
+  const currentCategoryLabel = selectedCategory === 'all'
+    ? `全部校历 (${entries.length})`
+    : `${EVENT_TYPE_MAP[selectedCategory as CalendarEntryCategory]?.label || selectedCategory} (${entries.filter((event) => event.category === selectedCategory).length})`;
+
+  const handleAddEvent = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!title.trim() || !date) return;
     setSubmitting(true);
     try {
       await addSchoolEvent({
         title: title.trim(),
         date,
+        startsAt: startsAtLocal ? shanghaiLocalInputToIso(startsAtLocal) : undefined,
         category,
         description: description.trim(),
         location: location.trim() || undefined
       });
       setTitle('');
       setDate('');
+      setStartsAtLocal('');
       setDescription('');
       setLocation('');
       setShowAddModal(false);
-    } catch (err) {
-      console.error('Failed to add school event:', err);
+    } catch (error) {
+      console.error('Failed to add school event:', error);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const calculateDaysAway = (targetDate: string) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const target = new Date(targetDate);
-    target.setHours(0, 0, 0, 0);
-    const diff = Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    return diff;
+  const handlePosterComplete = useCallback((result: 'shared' | 'downloaded' | 'cancelled') => {
+    setShareMessage(result === 'shared' ? '已打开系统分享面板' : result === 'downloaded' ? '日历长图已下载' : '已取消分享');
+    setPosterJob(null);
+    setExporting(false);
+  }, []);
+
+  const handlePosterError = useCallback((message: string) => {
+    setShareMessage(message);
+    setPosterJob(null);
+    setExporting(false);
+  }, []);
+
+  const handleExportCalendar = () => {
+    const generatedAt = new Date();
+    const upcoming = getUpcomingEntries(entries, generatedAt, 30);
+    setExporting(true);
+    setShareMessage('正在生成未来 30 天日历长图…');
+    setPosterJob({
+      id: `calendar-${generatedAt.getTime()}`,
+      fileName: `${(settings.className || '班级').replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 50)}-未来30天日程.png`,
+      title: `${settings.className || '班级'}未来 30 天日程`,
+      text: `未来 30 天共有 ${upcoming.length} 项日程`,
+      content: (
+        <CalendarSharePoster
+          entries={upcoming}
+          className={settings.className}
+          semester={settings.semester}
+          generatedAt={generatedAt}
+        />
+      )
+    });
   };
-
-  const filteredEvents = selectedCategory === 'all'
-    ? events
-    : events.filter(e => e.category === selectedCategory);
-
-  const currentCategoryLabel = selectedCategory === 'all'
-    ? `全部校历 (${events.length})`
-    : `${EVENT_TYPE_MAP[selectedCategory as SchoolEventCategory]?.label || selectedCategory} (${events.filter(e => e.category === selectedCategory).length})`;
 
   return (
     <div className="space-y-4">
-      {/* Header & Controls */}
-      <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white p-4 shadow-xs dark:border-slate-800/80 dark:bg-slate-900 sm:p-5 lg:flex-row lg:items-center">
         <div>
-          <h2 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <CalendarIcon className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          <h2 className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white">
+            <CalendarIcon className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             学校校历与学期关键日程
           </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            涵盖全校重大教学日程、考试测评、节假日及校园活动时间轴
-          </p>
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">校园日程与通知 DDL 自动汇总，按北京时间展示</p>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
-          {/* Category Dropdown List - Click to expand */}
+        <div className="flex flex-wrap items-center gap-2.5">
           <div className="relative" ref={dropdownRef}>
-            <button
-              type="button"
-              onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
-              className="inline-flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700/80 rounded-xl transition-colors border border-slate-200/60 dark:border-slate-700/60"
-            >
-              <Filter className="w-3.5 h-3.5 text-slate-500" />
-              <span>{currentCategoryLabel}</span>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+            <button type="button" onClick={() => setShowCategoryDropdown((visible) => !visible)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200/60 bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200/80 dark:border-slate-700/60 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700/80">
+              <Filter className="h-3.5 w-3.5 text-slate-500" /><span>{currentCategoryLabel}</span><ChevronDown className="h-3.5 w-3.5 text-slate-400" />
             </button>
-
-            {showCategoryDropdown && (
-              <div className="absolute right-0 mt-1.5 w-44 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl p-1.5 text-xs z-30 animate-in fade-in">
-                <button
-                  onClick={() => {
-                    setSelectedCategory('all');
-                    setShowCategoryDropdown(false);
-                  }}
-                  className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
-                    selectedCategory === 'all'
-                      ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
-                      : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <span>全部校历</span>
-                  <span className="text-[10px] text-slate-400">{events.length}</span>
+            {showCategoryDropdown ? (
+              <div className="absolute right-0 z-30 mt-1.5 w-44 rounded-xl border border-slate-200 bg-white p-1.5 text-xs shadow-xl dark:border-slate-800 dark:bg-slate-900">
+                <button type="button" onClick={() => { setSelectedCategory('all'); setShowCategoryDropdown(false); }} className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left ${selectedCategory === 'all' ? 'bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300' : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>
+                  <span>全部校历</span><span className="text-[10px] text-slate-400">{entries.length}</span>
                 </button>
                 <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
-                {Object.entries(EVENT_TYPE_MAP).map(([key, info]) => {
-                  const count = events.filter(e => e.category === key).length;
-                  return (
-                    <button
-                      key={key}
-                      onClick={() => {
-                        setSelectedCategory(key);
-                        setShowCategoryDropdown(false);
-                      }}
-                      className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-left transition-colors ${
-                        selectedCategory === key
-                          ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-semibold'
-                          : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                      }`}
-                    >
-                      <span>{info.label}</span>
-                      <span className="text-[10px] text-slate-400">{count}</span>
-                    </button>
-                  );
-                })}
+                {Object.entries(EVENT_TYPE_MAP).map(([key, info]) => (
+                  <button type="button" key={key} onClick={() => { setSelectedCategory(key); setShowCategoryDropdown(false); }} className={`flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left ${selectedCategory === key ? 'bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300' : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800'}`}>
+                    <span>{info.label}</span><span className="text-[10px] text-slate-400">{entries.filter((entry) => entry.category === key).length}</span>
+                  </button>
+                ))}
               </div>
-            )}
+            ) : null}
           </div>
 
-          {isCommittee && (
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors whitespace-nowrap shrink-0"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              添加事件
-            </button>
-          )}
+          <button type="button" onClick={handleExportCalendar} disabled={exporting} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            <Share2 className="h-3.5 w-3.5" />{exporting ? '生成中' : '分享未来30天'}
+          </button>
+
+          {isCommittee ? (
+            <>
+              <button type="button" onClick={() => setShowAiImport(true)} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 dark:border-violet-900/60 dark:bg-violet-950/40 dark:text-violet-300">
+                <Sparkles className="h-3.5 w-3.5" />AI 导入
+              </button>
+              <button type="button" onClick={() => setShowAddModal(true)} className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition hover:bg-indigo-700">
+                <Plus className="h-3.5 w-3.5" />添加事件
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 
-      {/* Events Timeline List */}
+      {shareMessage ? <div role="status" className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300">{shareMessage}</div> : null}
+
       <div className="space-y-3">
         {filteredEvents.length === 0 ? (
-          <div className="text-center py-12 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 p-6">
-            <CalendarIcon className="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-6 py-12 text-center dark:border-slate-800/80 dark:bg-slate-900">
+            <CalendarIcon className="mx-auto mb-2 h-8 w-8 text-slate-300 dark:text-slate-600" />
             <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">暂无符合条件的校历记录</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">有新日程发布时将在此处自动排序显示</p>
+            <p className="mt-0.5 text-[11px] text-slate-400">通知填写 DDL 后也会自动出现在这里</p>
           </div>
-        ) : (
-          filteredEvents.map((event) => {
-            const typeInfo = EVENT_TYPE_MAP[event.category] || EVENT_TYPE_MAP.activity;
-            const daysAway = calculateDaysAway(event.date);
-
-            return (
-              <div
-                key={event.id}
-                className="p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800/80 bg-white dark:bg-slate-900 shadow-2xs hover:border-slate-300 dark:hover:border-slate-700 transition-colors"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1.5 flex-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${typeInfo.badge}`}>
-                        {typeInfo.label}
-                      </span>
-                      <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
-                        {event.title}
-                      </h3>
-                    </div>
-
-                    {event.description && (
-                      <p className="text-xs text-slate-600 dark:text-slate-300 whitespace-pre-line leading-relaxed">
-                        {event.description}
-                      </p>
-                    )}
-
-                    <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-400 pt-1">
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        日期：{event.date}
-                      </span>
-                      {event.location && (
-                        <span className="flex items-center gap-1">
-                          <MapPin className="w-3 h-3 text-slate-400" />
-                          地点：{event.location}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col items-end gap-2 shrink-0">
-                    <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg ${
-                      daysAway === 0
-                        ? 'bg-rose-500 text-white'
-                        : daysAway > 0
-                          ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
-                          : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-                    }`}>
-                      {daysAway === 0 ? '今日进行' : daysAway > 0 ? `倒计时 ${daysAway} 天` : '已结束'}
-                    </span>
-
-                    {isCommittee && (
-                      <button
-                        onClick={() => setEventToDelete(event)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded-md transition-colors"
-                        title="删除事件"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    )}
+        ) : filteredEvents.map((event) => {
+          const typeInfo = EVENT_TYPE_MAP[event.category];
+          const countdownTarget = event.startsAt || shanghaiDateToEndMs(event.date);
+          const isPast = new Date(countdownTarget).getTime() <= now;
+          return (
+            <div key={event.id} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-2xs transition-colors hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-900 dark:hover:border-slate-700 sm:p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2"><span className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${typeInfo.badge}`}>{typeInfo.label}</span><h3 className="text-xs font-bold text-slate-900 dark:text-white sm:text-sm">{event.title}</h3></div>
+                  {event.description ? <p className="whitespace-pre-line text-xs leading-relaxed text-slate-600 dark:text-slate-300">{event.description}</p> : null}
+                  <div className="flex flex-wrap items-center gap-4 pt-1 text-[11px] text-slate-400">
+                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{event.startsAt ? `时间：${formatShanghaiDateTime(event.startsAt)}` : `日期：${event.date}`}</span>
+                    {event.location ? <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />地点：{event.location}</span> : null}
                   </div>
                 </div>
+                <div className="flex shrink-0 flex-col items-end gap-2">
+                  <span className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${isPast ? 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400' : event.source === 'notice' ? 'bg-rose-500 text-white' : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'}`}>{formatCountdown(countdownTarget, now)}</span>
+                  {isCommittee && event.source === 'schoolEvent' ? <button type="button" onClick={() => setEventToDelete(event)} className="rounded-md p-1 text-slate-400 transition-colors hover:text-rose-600" title="删除事件"><Trash2 className="h-3.5 w-3.5" /></button> : null}
+                </div>
               </div>
-            );
-          })
-        )}
+            </div>
+          );
+        })}
       </div>
 
-      {/* Add Modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/50 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md p-5 sm:p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Plus className="w-4 h-4 text-indigo-600" />
-                新增学校日历日程
-              </h3>
-              <button
-                onClick={() => setShowAddModal(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
+      {showAddModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:p-6">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800"><h3 className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white"><Plus className="h-4 w-4 text-indigo-600" />新增学校日历日程</h3><button type="button" onClick={() => setShowAddModal(false)} aria-label="关闭新增日程" className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"><X className="h-4 w-4" /></button></div>
             <form onSubmit={handleAddEvent} className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  日程名称 *
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="例如：期中统考测试 / 校园秋季田径运动会"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
+              <label className="block"><span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">日程名称 *</span><input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：期中统考测试" className="form-field" /></label>
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    发生日期 *
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                    事件类别
-                  </label>
-                  <select
-                    value={category}
-                    onChange={(e) => setCategory(e.target.value as SchoolEventCategory)}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                  >
-                    {Object.entries(EVENT_TYPE_MAP).map(([key, info]) => (
-                      <option key={key} value={key}>{info.label}</option>
-                    ))}
-                  </select>
-                </div>
+                <label><span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">发生日期 *</span><input type="date" required value={date} onChange={(event) => { setDate(event.target.value); setStartsAtLocal(''); }} className="form-field" /></label>
+                <label><span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">事件类别</span><select value={category} onChange={(event) => setCategory(event.target.value as SchoolEventCategory)} className="form-field">{SCHOOL_EVENT_OPTIONS.map((value) => <option key={value} value={value}>{EVENT_TYPE_MAP[value].label}</option>)}</select></label>
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  地点 / 考场 (选填)
-                </label>
-                <input
-                  type="text"
-                  placeholder="例如：主教学楼考场 / 田径场"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  详情说明
-                </label>
-                <textarea
-                  rows={3}
-                  placeholder="输入事件要求、注意事项或参与须知..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 resize-none"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="px-3.5 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors font-medium"
-                >
-                  取消
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-4 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 rounded-xl shadow-xs transition-colors"
-                >
-                  {submitting ? '保存中...' : '确认添加'}
-                </button>
-              </div>
+              <label className="block"><span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">精确时间（选填，北京时间）</span><input type="datetime-local" value={startsAtLocal} onChange={(event) => { setStartsAtLocal(event.target.value); const startsAt = shanghaiLocalInputToIso(event.target.value); if (startsAt) setDate(getShanghaiDate(startsAt)); }} className="form-field" /></label>
+              <label className="block"><span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">地点 / 考场</span><input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="例如：主教学楼 302" className="form-field" /></label>
+              <label className="block"><span className="mb-1 block text-xs font-semibold text-slate-700 dark:text-slate-300">详情说明</span><textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} className="form-field resize-none" /></label>
+              <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800"><button type="button" onClick={() => setShowAddModal(false)} className="rounded-xl px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800">取消</button><button type="submit" disabled={submitting} className="rounded-xl bg-indigo-600 px-4 py-1.5 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50">{submitting ? '保存中…' : '确认添加'}</button></div>
             </form>
           </div>
         </div>
-      )}
-      {/* Confirm Delete Modal */}
-      <ConfirmModal
-        isOpen={Boolean(eventToDelete)}
-        title="确认删除该校历事件？"
-        message={`确定要删除 "${eventToDelete?.title}" (${eventToDelete?.date}) 吗？删除后班级校历将不再显示该日程。`}
-        confirmText="确认删除"
-        onConfirm={async () => {
-          if (eventToDelete) {
-            await deleteSchoolEvent(eventToDelete.id);
-          }
-        }}
-        onClose={() => setEventToDelete(null)}
-      />
+      ) : null}
+
+      <ConfirmModal isOpen={Boolean(eventToDelete)} title="确认删除该校历事件？" message={`确定要删除 "${eventToDelete?.title}" (${eventToDelete?.date}) 吗？删除后班级校历将不再显示该日程。`} confirmText="确认删除" onConfirm={async () => { if (eventToDelete?.source === 'schoolEvent') await deleteSchoolEvent(eventToDelete.id.replace(/^schoolEvent:/, '')); }} onClose={() => setEventToDelete(null)} />
+      {showAiImport ? <React.Suspense fallback={null}><AiImportModal isOpen onClose={() => setShowAiImport(false)} defaultTarget="calendar" /></React.Suspense> : null}
+      <PosterExportHost job={posterJob} onComplete={handlePosterComplete} onError={handlePosterError} />
     </div>
   );
 };

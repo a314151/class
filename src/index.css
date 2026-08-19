@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+@layer components {
+  .form-field {
+    @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 outline-hidden transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100;
+  }
+}
+
 @keyframes birthday-overlay-fade {
   0% { opacity: 0; }
   10%, 78% { opacity: 1; }

@@ -173,9 +173,9 @@ function MainAppContent() {
         {/* Dynamic Content Panel */}
         <div className="flex-1 min-w-0">
           <Suspense fallback={<ModuleFallback />}>
-            {activeTab === 'notice' && <NoticeModule />}
+            {activeTab === 'notice' && <NoticeModule settings={settings} />}
             {activeTab === 'birthday' && <BirthdayModule />}
-            {activeTab === 'calendar' && <CalendarModule />}
+            {activeTab === 'calendar' && <CalendarModule settings={settings} />}
             {activeTab === 'chat' && <ChatModule />}
             {activeTab === 'poll' && <PollModule />}
             {activeTab === 'forms' && <FormCollectionModule />}

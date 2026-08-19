@@ -1,7 +1,9 @@
 import firebaseConfig from '../firebase-applet-config.json';
+import { AiServiceError, isAiRole, parseAiMessageWithDeepSeek } from './ai';
 
 interface Env {
   ASSETS: Fetcher;
+  DEEPSEEK_API_KEY?: string;
 }
 
 interface Fetcher {
@@ -843,7 +845,26 @@ const handleVote = async (request: Request): Promise<Response> => {
   throw new HttpError(409, '投票更新冲突，请重试', 'VOTE_CONFLICT');
 };
 
-const routeApi = async (request: Request): Promise<Response> => {
+const handleAiParse = async (request: Request, env: Env): Promise<Response> => {
+  const tokens = await getSessionTokens(request);
+  const session = await fetchProfileByToken(tokens.idToken, true);
+  if (!isAiRole(session.profile.role)) {
+    throw new HttpError(403, '只有班委可以使用 AI 导入', 'COMMITTEE_REQUIRED');
+  }
+  const body = await readJson(request);
+  const text = String(body.text || '');
+  try {
+    const draft = await parseAiMessageWithDeepSeek(text, env.DEEPSEEK_API_KEY);
+    return success(draft, tokens.refreshed ? sessionHeaders(request, tokens) : undefined);
+  } catch (error) {
+    if (error instanceof AiServiceError) {
+      throw new HttpError(error.status, error.message, error.code);
+    }
+    throw error;
+  }
+};
+
+const routeApi = async (request: Request, env: Env): Promise<Response> => {
   assertSameOriginWrite(request);
   const url = new URL(request.url);
   const route = `${request.method} ${url.pathname}`;
@@ -861,6 +882,7 @@ const routeApi = async (request: Request): Promise<Response> => {
   if (route === 'POST /api/auth/managed-user') return handleManagedUser(request);
   if (route === 'POST /api/firestore') return handleFirestore(request);
   if (route === 'POST /api/polls/vote') return handleVote(request);
+  if (route === 'POST /api/ai/parse-message') return handleAiParse(request, env);
   throw new HttpError(404, '接口不存在', 'NOT_FOUND');
 };
 
@@ -870,7 +892,7 @@ export default {
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
 
     try {
-      return await routeApi(request);
+      return await routeApi(request, env);
     } catch (error) {
       const httpError = error instanceof HttpError
         ? error
