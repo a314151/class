@@ -177,19 +177,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
-      if (user) {
-        if (adminOverride || user.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
-          const adminProf = getCanonicalAdminProfile();
-          setProfile(adminProf);
-          localStorage.setItem('class_space_cached_profile', JSON.stringify(adminProf));
-          saveUserProfile(adminProf).catch(() => {});
-        } else if (!user.isAnonymous) {
-          // Only fetch if profile is not already loaded or matches
-          if (!profile || profile.uid === user.uid) {
-            await fetchOrCreateProfile(user);
-          }
+      if (user && !user.isAnonymous) {
+        // Only fetch if profile is not already loaded
+        if (!profile) {
+          await fetchOrCreateProfile(user);
         }
-      } else {
+      } else if (!user) {
         // Ensure anonymous auth for Firestore rules without disrupting active student session
         try {
           await signInAnonymously(auth);
@@ -201,7 +194,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     return () => unsubscribe();
-  }, [adminOverride]);
+  }, []);
 
   const loginWithGoogle = async () => {
     setLoading(true);
@@ -245,8 +238,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 2. Hash password with SHA-256
       const hashedPass = await hashPassword(pass);
 
-      const isOwner = email.toLowerCase() === OWNER_EMAIL.toLowerCase() || studentId === '20260001';
-      const docUid = isOwner ? CANONICAL_ADMIN_UID : studentId;
+      const isSuperAdminAccount = studentId === '20260001';
+      const docUid = isSuperAdminAccount ? CANONICAL_ADMIN_UID : studentId;
 
       const newProfile: UserProfile = {
         uid: docUid,
@@ -254,17 +247,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email: email || `${studentId}@class.local`,
         studentId: studentId,
         passwordHash: hashedPass,
-        role: isOwner ? 'super_admin' : 'member',
+        role: isSuperAdminAccount ? 'super_admin' : 'member',
         avatar: `https://api.dicebear.com/7.x/bottts/svg?seed=student_${studentId}`,
         birthday: '2008-06-15',
-        bio: isOwner ? '班级空间超级管理员 / 班长' : '热爱班集体，努力学习，共同进步！',
+        bio: isSuperAdminAccount ? '班级空间超级管理员 / 班长' : '热爱班集体，努力学习，共同进步！',
         createdAt: new Date().toISOString()
       };
 
       // 3. Save directly to Firestore users collection
       await saveUserProfile(newProfile);
 
-      // 4. Update local state and cache
+      // 4. Update local state and cache (and reset any previous admin override)
+      if (!isSuperAdminAccount) {
+        setAdminOverride(false);
+        localStorage.removeItem('class_space_admin_override');
+      }
+
       setProfile(newProfile);
       localStorage.setItem('class_space_cached_profile', JSON.stringify(newProfile));
       localStorage.setItem(`class_space_registered_${studentId}`, JSON.stringify(newProfile));
@@ -301,8 +299,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      // 1. Check if Super Admin secret key
-      if (ADMIN_SECRET_KEYS.includes(pass) || (account.toLowerCase() === OWNER_EMAIL.toLowerCase() && pass === 'lry123321')) {
+      // 1. Explicit Owner Email login
+      if (account.toLowerCase() === OWNER_EMAIL.toLowerCase() && pass === 'lry123321') {
         setAdminOverride(true);
         localStorage.setItem('class_space_admin_override', 'true');
         const adminProf = getCanonicalAdminProfile();
@@ -349,10 +347,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         throw new Error(`学号【${account}】密码输入错误！请核对您注册时设置的密码；若忘记密码请点击下方“找回密码”。`);
       }
 
-      // 5. Successful login
-      if (matchedProfile.email?.toLowerCase() === OWNER_EMAIL.toLowerCase()) {
+      // 5. Successful login: update state & role
+      if (matchedProfile.role === 'super_admin' || matchedProfile.studentId === '20260001') {
         setAdminOverride(true);
         localStorage.setItem('class_space_admin_override', 'true');
+      } else {
+        setAdminOverride(false);
+        localStorage.removeItem('class_space_admin_override');
       }
 
       setProfile(matchedProfile);
@@ -476,8 +477,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser(null);
   };
 
-  const isSuperAdmin = adminOverride || profile?.role === 'super_admin' || currentUser?.email?.toLowerCase() === OWNER_EMAIL.toLowerCase();
-  const isCommittee = isSuperAdmin || profile?.role === 'committee';
+  const isSuperAdmin = !!profile && (profile.role === 'super_admin' || profile.uid === CANONICAL_ADMIN_UID || profile.studentId === '20260001');
+  const isCommittee = isSuperAdmin || (!!profile && profile.role === 'committee');
   const isMember = !!profile;
 
   return (
