@@ -116,6 +116,7 @@ export const ChatModule: React.FC = () => {
     const convoId = getConversationId(currentMessagingUid, selectedDmUid);
     const unsub = subscribeToDirectMessages(
       convoId,
+      currentMessagingUid,
       (data) => {
         setDirectMessages(data);
         setSendError(null);
