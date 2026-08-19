@@ -13,7 +13,9 @@ import {
   limit, 
   arrayUnion, 
   arrayRemove,
-  addDoc
+  addDoc,
+  runTransaction,
+  writeBatch
 } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { 
@@ -72,45 +74,49 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
   const usersRef = collection(db, 'users');
   return onSnapshot(usersRef, (snapshot) => {
-    const rawUsers: UserProfile[] = [];
+    const uniqueUsersMap = new Map<string, { profile: UserProfile; canonical: boolean }>();
+
     snapshot.forEach((docSnap) => {
       const data = docSnap.data() as UserProfile;
-      rawUsers.push({ ...data, uid: data.uid || docSnap.id });
+      const profile = { ...data, uid: data.uid || docSnap.id };
+      const isAdmin = profile.role === 'super_admin'
+        || profile.studentId === '20260001'
+        || profile.uid === 'admin_super_account'
+        || profile.email?.toLowerCase() === 'lry674515314@gmail.com';
+      const logicalKey = isAdmin
+        ? 'admin_super_account'
+        : profile.studentId?.trim() || profile.uid;
+      const canonicalId = isAdmin ? 'admin_super_account' : profile.uid;
+      const isCanonicalDocument = docSnap.id === canonicalId;
+      const existing = uniqueUsersMap.get(logicalKey);
+
+      if (!existing) {
+        uniqueUsersMap.set(logicalKey, { profile, canonical: isCanonicalDocument });
+        return;
+      }
+
+      const mergedProfile = isCanonicalDocument
+        ? { ...existing.profile, ...profile }
+        : { ...profile, ...existing.profile };
+      uniqueUsersMap.set(logicalKey, {
+        profile: mergedProfile,
+        canonical: existing.canonical || isCanonicalDocument
+      });
     });
 
-    // Deduplicate: Keep one super_admin and one per studentId
-    const uniqueUsersMap = new Map<string, UserProfile>();
-    let hasAdmin = false;
-
-    for (const u of rawUsers) {
-      const isAdmin = u.role === 'super_admin' || u.studentId === '20260001' || u.uid === 'admin_super_account' || u.email === 'lry674515314@gmail.com';
-      if (isAdmin) {
-        if (!hasAdmin) {
-          uniqueUsersMap.set('admin_super_account', {
-            ...u,
+    callback(Array.from(uniqueUsersMap.entries()).map(([key, entry]) => {
+      if (key === 'admin_super_account') {
+        return {
+            ...entry.profile,
             uid: 'admin_super_account',
             role: 'super_admin',
             studentId: '20260001',
-            name: u.name || '李班长 (超级管理员)',
-            email: u.email || 'lry674515314@gmail.com'
-          });
-          hasAdmin = true;
-        }
-      } else {
-        const studentKey = (u.studentId || u.uid || '').trim();
-        if (studentKey) {
-          if (!uniqueUsersMap.has(studentKey)) {
-            uniqueUsersMap.set(studentKey, u);
-          } else {
-            // Merge in case of richer fields
-            const existing = uniqueUsersMap.get(studentKey)!;
-            uniqueUsersMap.set(studentKey, { ...existing, ...u });
-          }
-        }
+            name: entry.profile.name || '李班长 (超级管理员)',
+            email: entry.profile.email || 'lry674515314@gmail.com'
+          };
       }
-    }
-
-    callback(Array.from(uniqueUsersMap.values()));
+      return entry.profile;
+    }));
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, 'users');
   });
@@ -118,21 +124,26 @@ export const subscribeToUsers = (callback: (users: UserProfile[]) => void) => {
 
 export const getUserProfile = async (uid: string): Promise<UserProfile | null> => {
   try {
-    const userDoc = await getDoc(doc(db, 'users', uid));
+    const [userDoc, studentDoc] = await Promise.all([
+      getDoc(doc(db, 'users', uid)),
+      getDoc(doc(db, 'users', `student_${uid}`))
+    ]);
     if (userDoc.exists()) {
       return userDoc.data() as UserProfile;
     }
-    const studentDoc = await getDoc(doc(db, 'users', `student_${uid}`));
     if (studentDoc.exists()) {
       return studentDoc.data() as UserProfile;
     }
+
     const qAuth = query(collection(db, 'users'), where('authUid', '==', uid));
-    const snapAuth = await getDocs(qAuth);
+    const qUid = query(collection(db, 'users'), where('uid', '==', uid));
+    const [snapAuth, snapUid] = await Promise.all([
+      getDocs(qAuth),
+      getDocs(qUid)
+    ]);
     if (!snapAuth.empty) {
       return snapAuth.docs[0].data() as UserProfile;
     }
-    const qUid = query(collection(db, 'users'), where('uid', '==', uid));
-    const snapUid = await getDocs(qUid);
     if (!snapUid.empty) {
       return snapUid.docs[0].data() as UserProfile;
     }
@@ -147,11 +158,13 @@ export const getUserProfileByStudentId = async (studentIdRaw: string): Promise<U
   try {
     const studentId = studentIdRaw.trim();
     // 1. Direct doc check studentId or student_{studentId}
-    const rawDoc = await getDoc(doc(db, 'users', studentId));
+    const [rawDoc, directDoc] = await Promise.all([
+      getDoc(doc(db, 'users', studentId)),
+      getDoc(doc(db, 'users', `student_${studentId}`))
+    ]);
     if (rawDoc.exists()) {
       return rawDoc.data() as UserProfile;
     }
-    const directDoc = await getDoc(doc(db, 'users', `student_${studentId}`));
     if (directDoc.exists()) {
       return directDoc.data() as UserProfile;
     }
@@ -160,14 +173,6 @@ export const getUserProfileByStudentId = async (studentIdRaw: string): Promise<U
     const snap = await getDocs(q);
     if (!snap.empty) {
       return snap.docs[0].data() as UserProfile;
-    }
-    // 3. Fallback scan all users in case of string formatting
-    const allUsersSnap = await getDocs(collection(db, 'users'));
-    for (const d of allUsersSnap.docs) {
-      const u = d.data() as UserProfile;
-      if (u.studentId && u.studentId.trim() === studentId) {
-        return u;
-      }
     }
     return null;
   } catch (e) {
@@ -178,17 +183,19 @@ export const getUserProfileByStudentId = async (studentIdRaw: string): Promise<U
 
 export const getUserProfileByEmail = async (emailRaw: string): Promise<UserProfile | null> => {
   try {
-    const email = emailRaw.trim().toLowerCase();
-    const q = query(collection(db, 'users'), where('email', '==', email));
-    const snap = await getDocs(q);
-    if (!snap.empty) {
-      return snap.docs[0].data() as UserProfile;
+    const rawEmail = emailRaw.trim();
+    const normalizedEmail = rawEmail.toLowerCase();
+    const emailQueries = [
+      getDocs(query(collection(db, 'users'), where('email', '==', normalizedEmail)))
+    ];
+    if (rawEmail !== normalizedEmail) {
+      emailQueries.push(getDocs(query(collection(db, 'users'), where('email', '==', rawEmail))));
     }
-    const allUsersSnap = await getDocs(collection(db, 'users'));
-    for (const d of allUsersSnap.docs) {
-      const u = d.data() as UserProfile;
-      if (u.email && u.email.trim().toLowerCase() === email) {
-        return u;
+
+    const snapshots = await Promise.all(emailQueries);
+    for (const snapshot of snapshots) {
+      if (!snapshot.empty) {
+        return snapshot.docs[0].data() as UserProfile;
       }
     }
     return null;
@@ -199,14 +206,13 @@ export const getUserProfileByEmail = async (emailRaw: string): Promise<UserProfi
 
 export const saveUserProfile = async (profile: UserProfile): Promise<void> => {
   try {
-    const mainUid = profile.studentId || profile.uid;
-    await setDoc(doc(db, 'users', mainUid), profile, { merge: true });
-    if (profile.uid && profile.uid !== mainUid) {
-      await setDoc(doc(db, 'users', profile.uid), profile, { merge: true });
-    }
-    if (profile.studentId) {
-      await setDoc(doc(db, 'users', `student_${profile.studentId}`), profile, { merge: true });
-    }
+    const normalizedProfile: UserProfile = {
+      ...profile,
+      uid: profile.uid.trim(),
+      studentId: profile.studentId.trim(),
+      email: profile.email.trim().toLowerCase()
+    };
+    await setDoc(doc(db, 'users', normalizedProfile.uid), normalizedProfile, { merge: true });
   } catch (e) {
     handleFirestoreError(e, OperationType.WRITE, `users/${profile.uid}`);
     throw e;
@@ -215,7 +221,30 @@ export const saveUserProfile = async (profile: UserProfile): Promise<void> => {
 
 export const deleteUserDoc = async (uid: string): Promise<void> => {
   try {
-    await deleteDoc(doc(db, 'users', uid));
+    const profile = await getUserProfile(uid);
+    const documentIds = new Set([uid]);
+    if (profile) {
+      documentIds.add(profile.uid);
+      const matchingQueries = [
+        getDocs(query(collection(db, 'users'), where('uid', '==', profile.uid)))
+      ];
+      if (profile.studentId) {
+        documentIds.add(profile.studentId);
+        documentIds.add(`student_${profile.studentId}`);
+        matchingQueries.push(
+          getDocs(query(collection(db, 'users'), where('studentId', '==', profile.studentId)))
+        );
+      }
+
+      const matchingSnapshots = await Promise.all(matchingQueries);
+      matchingSnapshots.forEach((matches) => {
+        matches.forEach((match) => documentIds.add(match.id));
+      });
+    }
+
+    const batch = writeBatch(db);
+    documentIds.forEach((documentId) => batch.delete(doc(db, 'users', documentId)));
+    await batch.commit();
   } catch (e) {
     handleFirestoreError(e, OperationType.DELETE, `users/${uid}`);
     throw e;
@@ -226,52 +255,73 @@ export const cleanupDuplicateUsers = async (): Promise<number> => {
   try {
     const snap = await getDocs(collection(db, 'users'));
     let cleanedCount = 0;
-    const seenStudentIds = new Set<string>();
-    let preservedAdminDocId: string | null = null;
+    const groups = new Map<string, Array<{ id: string; profile: UserProfile }>>();
 
-    const docs = snap.docs;
-    // Step 1: Handle Super Admin deduplication
-    for (const docSnap of docs) {
-      const data = docSnap.data() as UserProfile;
-      const docId = docSnap.id;
-      const isAdmin = data.role === 'super_admin' || data.studentId === '20260001' || data.email === 'lry674515314@gmail.com' || docId === 'admin_super_account';
+    for (const docSnap of snap.docs) {
+      const profile = docSnap.data() as UserProfile;
+      const isAdmin = profile.role === 'super_admin'
+        || profile.studentId === '20260001'
+        || profile.email?.toLowerCase() === 'lry674515314@gmail.com'
+        || docSnap.id === 'admin_super_account';
+      const logicalKey = isAdmin
+        ? 'admin_super_account'
+        : `student:${profile.studentId?.trim() || profile.uid?.trim() || docSnap.id}`;
+      const group = groups.get(logicalKey) || [];
+      group.push({ id: docSnap.id, profile });
+      groups.set(logicalKey, group);
+    }
 
-      if (isAdmin) {
-        if (!preservedAdminDocId) {
-          preservedAdminDocId = docId;
-          // Ensure canonical doc exists
-          await setDoc(doc(db, 'users', 'admin_super_account'), {
-            ...data,
+    let batch = writeBatch(db);
+    let pendingWrites = 0;
+    const flushBatch = async () => {
+      if (pendingWrites === 0) return;
+      await batch.commit();
+      batch = writeBatch(db);
+      pendingWrites = 0;
+    };
+    const ensureBatchCapacity = async () => {
+      if (pendingWrites >= 450) {
+        await flushBatch();
+      }
+    };
+
+    for (const [logicalKey, entries] of groups) {
+      const isAdmin = logicalKey === 'admin_super_account';
+      const preferred = entries.find(({ id, profile }) => id === profile.uid) || entries[0];
+      const canonicalId = isAdmin
+        ? 'admin_super_account'
+        : preferred.profile.uid?.trim() || preferred.profile.studentId?.trim() || preferred.id;
+      const merged = entries.reduce<UserProfile>(
+        (result, entry) => ({ ...result, ...entry.profile }),
+        {} as UserProfile
+      );
+      Object.assign(merged, preferred.profile);
+      const canonicalProfile: UserProfile = isAdmin
+        ? {
+            ...merged,
             uid: 'admin_super_account',
             role: 'super_admin',
             studentId: '20260001',
             email: 'lry674515314@gmail.com',
-            name: data.name || '李班长 (超级管理员)',
-            bio: data.bio || '班级空间超级管理员 / 班长'
-          }, { merge: true });
+            name: merged.name || '李班长 (超级管理员)',
+            bio: merged.bio || '班级空间超级管理员 / 班长'
+          }
+        : { ...merged, uid: canonicalId };
 
-          if (docId !== 'admin_super_account') {
-            await deleteDoc(docSnap.ref);
-            cleanedCount++;
-          }
-        } else {
-          // Already have preserved admin, delete this duplicate
-          if (docId !== 'admin_super_account') {
-            await deleteDoc(docSnap.ref);
-            cleanedCount++;
-          }
-        }
-      } else if (data.studentId) {
-        // Step 2: Handle Student duplicates
-        if (seenStudentIds.has(data.studentId)) {
-          await deleteDoc(docSnap.ref);
-          cleanedCount++;
-        } else {
-          seenStudentIds.add(data.studentId);
-        }
+      await ensureBatchCapacity();
+      batch.set(doc(db, 'users', canonicalId), canonicalProfile, { merge: false });
+      pendingWrites++;
+
+      for (const entry of entries) {
+        if (entry.id === canonicalId) continue;
+        await ensureBatchCapacity();
+        batch.delete(doc(db, 'users', entry.id));
+        pendingWrites++;
+        cleanedCount++;
       }
     }
 
+    await flushBatch();
     return cleanedCount;
   } catch (e) {
     console.warn('cleanupDuplicateUsers error:', e);
@@ -281,7 +331,11 @@ export const cleanupDuplicateUsers = async (): Promise<number> => {
 
 export const updateUserRole = async (uid: string, newRole: UserRole): Promise<void> => {
   try {
-    await updateDoc(doc(db, 'users', uid), { role: newRole });
+    const profile = await getUserProfile(uid);
+    if (!profile) {
+      throw new Error(`User profile not found: ${uid}`);
+    }
+    await saveUserProfile({ ...profile, role: newRole });
   } catch (e) {
     handleFirestoreError(e, OperationType.UPDATE, `users/${uid}`);
     throw e;
@@ -421,13 +475,13 @@ export const deleteSchoolEvent = async (id: string): Promise<void> => {
 
 // ================= PUBLIC CHAT MESSAGES =================
 export const subscribeToChatMessages = (callback: (messages: ChatMessage[]) => void) => {
-  const q = query(collection(db, 'messages'), orderBy('createdAt', 'asc'), limit(150));
+  const q = query(collection(db, 'messages'), orderBy('createdAt', 'desc'), limit(150));
   return onSnapshot(q, (snapshot) => {
     const list: ChatMessage[] = [];
     snapshot.forEach((d) => {
       list.push({ id: d.id, ...d.data() } as ChatMessage);
     });
-    callback(list);
+    callback(list.reverse());
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, 'messages');
   });
@@ -473,7 +527,7 @@ export const subscribeToDirectMessages = (
   const q = query(
     collection(db, 'directMessages'),
     where('conversationId', '==', conversationId),
-    orderBy('createdAt', 'asc'),
+    orderBy('createdAt', 'desc'),
     limit(100)
   );
   return onSnapshot(q, (snapshot) => {
@@ -481,7 +535,7 @@ export const subscribeToDirectMessages = (
     snapshot.forEach((d) => {
       list.push({ id: d.id, ...d.data() } as DirectMessage);
     });
-    callback(list);
+    callback(list.reverse());
   }, (error) => {
     handleFirestoreError(error, OperationType.GET, `directMessages?conversationId=${conversationId}`);
   });
@@ -528,6 +582,7 @@ export const toggleLikeWish = async (wishId: string, userUid: string, hasLiked: 
     });
   } catch (e) {
     handleFirestoreError(e, OperationType.UPDATE, `birthdayWishes/${wishId}`);
+    throw e;
   }
 };
 
@@ -569,25 +624,26 @@ export const votePoll = async (
   optionIds: string[], 
   userUid: string, 
   currentOptions: Poll['options'],
-  isMultiple: boolean
+  _isMultiple: boolean
 ): Promise<void> => {
   try {
-    const updatedOptions = currentOptions.map((opt) => {
-      let newVoters = isMultiple 
-        ? opt.voterUids.filter(u => u !== userUid)
-        : opt.voterUids.filter(u => u !== userUid);
-
-      if (optionIds.includes(opt.id)) {
-        newVoters.push(userUid);
+    const pollRef = doc(db, 'polls', pollId);
+    await runTransaction(db, async (transaction) => {
+      const pollSnapshot = await transaction.get(pollRef);
+      if (!pollSnapshot.exists()) {
+        throw new Error(`Poll not found: ${pollId}`);
       }
-      return {
-        ...opt,
-        voterUids: Array.from(new Set(newVoters))
-      };
-    });
 
-    await updateDoc(doc(db, 'polls', pollId), {
-      options: updatedOptions
+      const latestOptions = (pollSnapshot.data() as Poll).options || currentOptions;
+      const updatedOptions = latestOptions.map((opt) => {
+        const voterUids = opt.voterUids.filter((uid) => uid !== userUid);
+        if (optionIds.includes(opt.id)) {
+          voterUids.push(userUid);
+        }
+        return { ...opt, voterUids: Array.from(new Set(voterUids)) };
+      });
+
+      transaction.update(pollRef, { options: updatedOptions });
     });
   } catch (e) {
     handleFirestoreError(e, OperationType.UPDATE, `polls/${pollId}`);
@@ -730,7 +786,6 @@ export const subscribeToSettings = (callback: (settings: ClassSettings) => void)
         try {
           const parsed = JSON.parse(cached);
           callback(parsed);
-          setDoc(doc(db, 'settings', 'general'), parsed, { merge: true }).catch(() => {});
           return;
         } catch (e) {}
       }

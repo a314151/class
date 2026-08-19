@@ -49,9 +49,9 @@ export const BirthdayModule: React.FC = () => {
     });
     const unsubUsers = subscribeToUsers((data) => {
       setUsers(data);
-      if (data.length > 0 && !selectedUser) {
-        setSelectedUser(data[0]);
-      }
+      setSelectedUser((current) =>
+        (current && data.find((user) => user.uid === current.uid)) || data[0] || null
+      );
     });
     return () => {
       unsubWishes();

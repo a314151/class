@@ -1,20 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { lazy, Suspense, useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar } from './components/Navbar';
 import { Sidebar, BASE_NAV_ITEMS, ADMIN_NAV_ITEM } from './components/Sidebar';
 import { NoticeModule } from './components/NoticeModule';
-import { BirthdayModule } from './components/BirthdayModule';
-import { CalendarModule } from './components/CalendarModule';
-import { ChatModule } from './components/ChatModule';
-import { PollModule } from './components/PollModule';
-import { FormCollectionModule } from './components/FormCollectionModule';
-import { FeedbackModule } from './components/FeedbackModule';
-import { ProfileModule } from './components/ProfileModule';
-import { SettingsModule } from './components/SettingsModule';
-import { AuthModal } from './components/AuthModal';
 import { ClassSettings } from './types';
 import { subscribeToSettings } from './services/firestoreService';
-import { Megaphone, Volume2, X, Sparkles, User, Crown } from 'lucide-react';
+import { X, User, Crown } from 'lucide-react';
+
+const BirthdayModule = lazy(() => import('./components/BirthdayModule').then((module) => ({ default: module.BirthdayModule })));
+const CalendarModule = lazy(() => import('./components/CalendarModule').then((module) => ({ default: module.CalendarModule })));
+const ChatModule = lazy(() => import('./components/ChatModule').then((module) => ({ default: module.ChatModule })));
+const PollModule = lazy(() => import('./components/PollModule').then((module) => ({ default: module.PollModule })));
+const FormCollectionModule = lazy(() => import('./components/FormCollectionModule').then((module) => ({ default: module.FormCollectionModule })));
+const FeedbackModule = lazy(() => import('./components/FeedbackModule').then((module) => ({ default: module.FeedbackModule })));
+const ProfileModule = lazy(() => import('./components/ProfileModule').then((module) => ({ default: module.ProfileModule })));
+const SettingsModule = lazy(() => import('./components/SettingsModule').then((module) => ({ default: module.SettingsModule })));
+const AuthModal = lazy(() => import('./components/AuthModal').then((module) => ({ default: module.AuthModal })));
+
+const ModuleFallback = () => (
+  <div className="min-h-48 flex items-center justify-center text-xs font-semibold text-slate-500 dark:text-slate-400">
+    正在加载模块...
+  </div>
+);
 
 function MainAppContent() {
   const { profile, loading, isSuperAdmin } = useAuth();
@@ -123,15 +130,17 @@ function MainAppContent() {
 
         {/* Dynamic Content Panel */}
         <div className="flex-1 min-w-0">
-          {activeTab === 'notice' && <NoticeModule />}
-          {activeTab === 'birthday' && <BirthdayModule />}
-          {activeTab === 'calendar' && <CalendarModule />}
-          {activeTab === 'chat' && <ChatModule />}
-          {activeTab === 'poll' && <PollModule />}
-          {activeTab === 'forms' && <FormCollectionModule />}
-          {activeTab === 'feedback' && <FeedbackModule />}
-          {activeTab === 'profile' && <ProfileModule />}
-          {activeTab === 'settings' && <SettingsModule />}
+          <Suspense fallback={<ModuleFallback />}>
+            {activeTab === 'notice' && <NoticeModule />}
+            {activeTab === 'birthday' && <BirthdayModule />}
+            {activeTab === 'calendar' && <CalendarModule />}
+            {activeTab === 'chat' && <ChatModule />}
+            {activeTab === 'poll' && <PollModule />}
+            {activeTab === 'forms' && <FormCollectionModule />}
+            {activeTab === 'feedback' && <FeedbackModule />}
+            {activeTab === 'profile' && <ProfileModule />}
+            {activeTab === 'settings' && <SettingsModule />}
+          </Suspense>
         </div>
       </main>
 
@@ -176,11 +185,15 @@ function MainAppContent() {
       </nav>
 
       {/* Auth Modal */}
-      <AuthModal
-        isOpen={showAuthModal}
-        initialMode={authModalMode}
-        onClose={() => setShowAuthModal(false)}
-      />
+      {showAuthModal && (
+        <Suspense fallback={null}>
+          <AuthModal
+            isOpen={showAuthModal}
+            initialMode={authModalMode}
+            onClose={() => setShowAuthModal(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
