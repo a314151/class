@@ -575,6 +575,18 @@ export const sendBirthdayWish = async (wish: Omit<BirthdayWish, 'id'>): Promise<
   }
 };
 
+export const updateBirthdayWish = async (id: string, message: string): Promise<void> => {
+  try {
+    await updateDoc(doc(db, 'birthdayWishes', id), {
+      message,
+      updatedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    handleFirestoreError(e, OperationType.UPDATE, `birthdayWishes/${id}`);
+    throw e;
+  }
+};
+
 export const toggleLikeWish = async (wishId: string, userUid: string, hasLiked: boolean): Promise<void> => {
   try {
     await updateDoc(doc(db, 'birthdayWishes', wishId), {

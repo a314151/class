@@ -92,6 +92,7 @@ export interface BirthdayWish {
   senderAvatar: string;
   message: string;
   createdAt: string;
+  updatedAt?: string;
   likes?: string[];
 }
 

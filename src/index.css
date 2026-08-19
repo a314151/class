@@ -1,5 +1,66 @@
 @import "tailwindcss";
 
+@keyframes birthday-overlay-fade {
+  0% { opacity: 0; }
+  10%, 78% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes birthday-glow-pulse {
+  0% { opacity: 0; transform: scale(0.8); }
+  28% { opacity: 0.72; transform: scale(1.08); }
+  100% { opacity: 0; transform: scale(1.35); }
+}
+
+@keyframes birthday-card-pop {
+  0% { opacity: 0; transform: translate(-50%, -44%) scale(0.68) rotate(-2deg); }
+  18% { opacity: 1; transform: translate(-50%, -50%) scale(1.06) rotate(1deg); }
+  30%, 76% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(0deg); }
+  100% { opacity: 0; transform: translate(-50%, -56%) scale(0.94); }
+}
+
+@keyframes birthday-particle-float {
+  0% { opacity: 0; top: 108%; transform: translateX(0) rotate(0deg) scale(0.55); }
+  12% { opacity: 1; }
+  100% { opacity: 0; top: -14%; transform: translateX(42px) rotate(680deg) scale(1.25); }
+}
+
+.birthday-celebration-overlay {
+  animation: birthday-overlay-fade 3.2s ease-out both;
+}
+
+.birthday-celebration-glow {
+  background:
+    radial-gradient(circle at 50% 50%, rgb(251 113 133 / 0.34), transparent 34%),
+    radial-gradient(circle at 24% 35%, rgb(167 139 250 / 0.24), transparent 30%),
+    radial-gradient(circle at 76% 65%, rgb(251 191 36 / 0.24), transparent 28%);
+  animation: birthday-glow-pulse 3.1s ease-out both;
+}
+
+.birthday-celebration-card {
+  animation: birthday-card-pop 3.05s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.birthday-float-particle {
+  animation-name: birthday-particle-float;
+  animation-timing-function: cubic-bezier(0.2, 0.65, 0.3, 1);
+  animation-fill-mode: both;
+  filter: drop-shadow(0 5px 8px rgb(244 63 94 / 0.2));
+}
+
+.birthday-float-particle:nth-of-type(3n) {
+  animation-direction: alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .birthday-celebration-overlay,
+  .birthday-celebration-glow,
+  .birthday-celebration-card,
+  .birthday-float-particle {
+    animation-duration: 1.6s !important;
+  }
+}
+
 @layer utilities {
   .glass-panel {
     background-color: rgba(255, 255, 255, 0.65);
