@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useState, useEffect, useRef } from 'react';
 import { 
+  ClassSettings,
   Notice, 
   NoticeCategory 
 } from '../types';
@@ -12,6 +13,16 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { R2UploadButton } from './R2UploadButton';
 import { ConfirmModal } from './ConfirmModal';
+import {
+  NoticeSharePoster,
+  PosterExportHost,
+  type PosterExportJob
+} from './SharePosters';
+import {
+  formatCountdown,
+  formatShanghaiDateTime,
+  shanghaiLocalInputToIso
+} from '../lib/dateTime';
 import { 
   Bell, 
   Pin, 
@@ -23,7 +34,10 @@ import {
   ChevronDown,
   X,
   Search,
-  Filter
+  Filter,
+  Share2,
+  Sparkles,
+  CalendarClock
 } from 'lucide-react';
 
 const CATEGORY_MAP: Record<NoticeCategory, { label: string; text: string; bg: string }> = {
@@ -36,20 +50,34 @@ const CATEGORY_MAP: Record<NoticeCategory, { label: string; text: string; bg: st
   routine: { label: '日常事务', text: 'text-slate-700 dark:text-slate-300', bg: 'bg-slate-100 dark:bg-slate-800' },
 };
 
-export const NoticeModule: React.FC = () => {
+const AiImportModal = React.lazy(() => import('./AiImportModal').then((module) => ({ default: module.AiImportModal })));
+
+interface NoticeModuleProps {
+  settings: ClassSettings;
+}
+
+const safeFilePart = (value: string) => value.replace(/[\\/:*?"<>|\s]+/g, '-').slice(0, 50);
+
+export const NoticeModule: React.FC<NoticeModuleProps> = ({ settings }) => {
   const { profile, isCommittee } = useAuth();
   const [notices, setNotices] = useState<Notice[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showAiImport, setShowAiImport] = useState(false);
   const [noticeToDelete, setNoticeToDelete] = useState<Notice | null>(null);
+  const [posterJob, setPosterJob] = useState<PosterExportJob | null>(null);
+  const [exportingNoticeId, setExportingNoticeId] = useState<string | null>(null);
+  const [shareMessage, setShareMessage] = useState('');
+  const [now, setNow] = useState(() => Date.now());
 
   // New Notice form
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [category, setCategory] = useState<NoticeCategory>('routine');
   const [isPinned, setIsPinned] = useState(false);
+  const [deadlineLocal, setDeadlineLocal] = useState('');
   const [attachmentUrl, setAttachmentUrl] = useState('');
   const [attachmentName, setAttachmentName] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -61,6 +89,11 @@ export const NoticeModule: React.FC = () => {
       setNotices(data);
     });
     return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   // Close dropdown on click outside
@@ -89,6 +122,7 @@ export const NoticeModule: React.FC = () => {
         authorUid: profile.uid,
         readBy: [profile.uid],
         createdAt: new Date().toISOString(),
+        deadlineAt: deadlineLocal ? shanghaiLocalInputToIso(deadlineLocal) : undefined,
         attachmentUrl: attachmentUrl || undefined,
         attachmentName: attachmentName || undefined,
       });
@@ -96,6 +130,7 @@ export const NoticeModule: React.FC = () => {
       setContent('');
       setCategory('routine');
       setIsPinned(false);
+      setDeadlineLocal('');
       setAttachmentUrl('');
       setAttachmentName('');
       setShowCreateModal(false);
@@ -118,6 +153,40 @@ export const NoticeModule: React.FC = () => {
     ? `全部通知 (${notices.length})` 
     : `${CATEGORY_MAP[selectedCategory as NoticeCategory]?.label || selectedCategory} (${notices.filter(n => n.category === selectedCategory).length})`;
 
+  const handlePosterComplete = useCallback((result: 'shared' | 'downloaded' | 'cancelled') => {
+    setShareMessage(result === 'shared' ? '已打开系统分享面板' : result === 'downloaded' ? '长图已下载' : '已取消分享');
+    setPosterJob(null);
+    setExportingNoticeId(null);
+  }, []);
+
+  const handlePosterError = useCallback((message: string) => {
+    setShareMessage(message);
+    setPosterJob(null);
+    setExportingNoticeId(null);
+  }, []);
+
+  const handleShareNotice = (notice: Notice) => {
+    const generatedAt = new Date();
+    setShareMessage('正在生成长图…');
+    setExportingNoticeId(notice.id);
+    setPosterJob({
+      id: `${notice.id}-${generatedAt.getTime()}`,
+      fileName: `${safeFilePart(notice.title || '班级通知')}.png`,
+      title: notice.title,
+      text: notice.deadlineAt
+        ? `${notice.title}，截止时间 ${formatShanghaiDateTime(notice.deadlineAt)}`
+        : notice.title,
+      content: (
+        <NoticeSharePoster
+          notice={notice}
+          className={settings.className}
+          semester={settings.semester}
+          generatedAt={generatedAt}
+        />
+      )
+    });
+  };
+
   return (
     <div className="space-y-4">
       {/* Header & Clean Minimal Toolbar */}
@@ -132,7 +201,7 @@ export const NoticeModule: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+        <div className="flex flex-wrap items-center gap-2.5">
           {/* Category Dropdown List - Click to expand */}
           <div className="relative" ref={dropdownRef}>
             <button
@@ -203,17 +272,33 @@ export const NoticeModule: React.FC = () => {
 
           {/* Create Button */}
           {isCommittee && (
-            <button
-              id="publish-notice-btn"
-              onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors whitespace-nowrap shrink-0"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              发布通知
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowAiImport(true)}
+                className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-violet-200 bg-violet-50 px-3.5 py-1.5 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-900/60 dark:bg-violet-950/40 dark:text-violet-300"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                AI 导入
+              </button>
+              <button
+                id="publish-notice-btn"
+                onClick={() => setShowCreateModal(true)}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs transition-colors whitespace-nowrap shrink-0"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                发布通知
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {shareMessage ? (
+        <div role="status" className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 dark:border-indigo-900/50 dark:bg-indigo-950/30 dark:text-indigo-300">
+          {shareMessage}
+        </div>
+      ) : null}
 
       {/* Notices List */}
       <div className="space-y-3">
@@ -262,6 +347,16 @@ export const NoticeModule: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleShareNotice(notice)}
+                      disabled={exportingNoticeId === notice.id}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                      title="生成长图并分享"
+                    >
+                      <Share2 className="h-3 w-3" />
+                      {exportingNoticeId === notice.id ? '生成中' : '分享长图'}
+                    </button>
                     {profile && (
                       <button
                         onClick={() => markNoticeAsRead(notice.id, profile.uid)}
@@ -297,6 +392,20 @@ export const NoticeModule: React.FC = () => {
                 <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed whitespace-pre-line mb-3">
                   {notice.content}
                 </p>
+
+                {notice.deadlineAt && (
+                  <div className={`mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border px-3 py-2 ${
+                    Date.parse(notice.deadlineAt) > now
+                      ? 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-300'
+                      : 'border-slate-200 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400'
+                  }`}>
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold">
+                      <CalendarClock className="h-3.5 w-3.5" />
+                      DDL：{formatShanghaiDateTime(notice.deadlineAt)}
+                    </span>
+                    <span className="text-xs font-black">{formatCountdown(notice.deadlineAt, now)}</span>
+                  </div>
+                )}
 
                 {/* Attachment if present */}
                 {notice.attachmentUrl && (
@@ -389,6 +498,19 @@ export const NoticeModule: React.FC = () => {
               </div>
 
               <div>
+                <label className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  <CalendarClock className="h-3.5 w-3.5 text-rose-500" />
+                  DDL（选填，北京时间）
+                </label>
+                <input
+                  type="datetime-local"
+                  value={deadlineLocal}
+                  onChange={(e) => setDeadlineLocal(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+                />
+              </div>
+
+              <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   通知详细内容 *
                 </label>
@@ -455,6 +577,16 @@ export const NoticeModule: React.FC = () => {
           }
         }}
         onClose={() => setNoticeToDelete(null)}
+      />
+      {showAiImport ? (
+        <React.Suspense fallback={null}>
+          <AiImportModal isOpen onClose={() => setShowAiImport(false)} defaultTarget="notice" />
+        </React.Suspense>
+      ) : null}
+      <PosterExportHost
+        job={posterJob}
+        onComplete={handlePosterComplete}
+        onError={handlePosterError}
       />
     </div>
   );
