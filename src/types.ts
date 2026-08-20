@@ -14,6 +14,8 @@ export interface UserProfile {
   passwordHash?: string;
   approved?: boolean;
   disabled?: boolean;
+  rejectionReason?: string;
+  rejectedAt?: string;
   profileDocId?: string;
   createdAt: string;
 }

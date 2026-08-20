@@ -192,9 +192,15 @@ const normalizeUsers = (documents: Array<UserProfile & { id: string }>): UserPro
   return Array.from(uniqueUsersMap.values()).map((entry) => entry.profile);
 };
 
-export const subscribeToUsers = (callback: (users: UserProfile[]) => void) =>
+export const subscribeToUsers = (
+  callback: (users: UserProfile[]) => void,
+  includePendingApplications = false
+) =>
   subscribeByPolling(
-    async () => normalizeUsers(await listDocuments<UserProfile>('users')),
+    async () => normalizeUsers(await listDocuments<UserProfile>('users', includePendingApplications
+      ? {}
+      : { filters: [{ field: 'approved', op: '==', value: true }] }
+    )),
     callback,
     { path: 'users', intervalMs: 10_000 }
   );
@@ -439,7 +445,27 @@ export const setUserAccessDisabled = async (uid: string, disabled: boolean) => {
   await setDocument('users', uid, { disabled }, true);
 };
 export const approveUserAccess = async (uid: string) => {
-  await setDocument('users', uid, { approved: true, disabled: false }, true);
+  await setDocument('users', uid, {
+    approved: true,
+    disabled: false,
+    rejectionReason: '',
+    rejectedAt: ''
+  }, true);
+};
+export const rejectUserAccess = async (uid: string, reasonRaw: string) => {
+  const rejectionReason = reasonRaw.trim();
+  if (!rejectionReason) {
+    throw new Error('请填写拒绝原因');
+  }
+  if (rejectionReason.length > 300) {
+    throw new Error('拒绝原因不能超过 300 个字符');
+  }
+  await setDocument('users', uid, {
+    approved: false,
+    disabled: true,
+    rejectionReason,
+    rejectedAt: new Date().toISOString()
+  }, true);
 };
 
 export const subscribeToAdminDirectMessages = (callback: (messages: DirectMessage[]) => void) =>
