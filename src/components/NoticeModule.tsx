@@ -35,7 +35,7 @@ import {
   X,
   Search,
   Filter,
-  Share2,
+  Download,
   Sparkles,
   CalendarClock
 } from 'lucide-react';
@@ -154,7 +154,7 @@ export const NoticeModule: React.FC<NoticeModuleProps> = ({ settings }) => {
     : `${CATEGORY_MAP[selectedCategory as NoticeCategory]?.label || selectedCategory} (${notices.filter(n => n.category === selectedCategory).length})`;
 
   const handlePosterComplete = useCallback((result: 'shared' | 'downloaded' | 'cancelled') => {
-    setShareMessage(result === 'shared' ? '已打开系统分享面板' : result === 'downloaded' ? '长图已下载' : '已取消分享');
+    setShareMessage(result === 'downloaded' ? '通知长图已保存到下载目录' : result === 'shared' ? '已打开系统分享面板' : '已取消保存');
     setPosterJob(null);
     setExportingNoticeId(null);
   }, []);
@@ -352,10 +352,10 @@ export const NoticeModule: React.FC<NoticeModuleProps> = ({ settings }) => {
                       onClick={() => handleShareNotice(notice)}
                       disabled={exportingNoticeId === notice.id}
                       className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-indigo-200 hover:text-indigo-600 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                      title="生成长图并分享"
+                      title="保存通知长图"
                     >
-                      <Share2 className="h-3 w-3" />
-                      {exportingNoticeId === notice.id ? '生成中' : '分享长图'}
+                      <Download className="h-3 w-3" />
+                      {exportingNoticeId === notice.id ? '生成中' : '保存长图'}
                     </button>
                     {profile && (
                       <button

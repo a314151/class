@@ -2,15 +2,17 @@ import { domToBlob } from 'modern-screenshot';
 
 export type ShareResult = 'shared' | 'downloaded' | 'cancelled';
 
-const downloadFile = (file: File) => {
+export const downloadPosterFile = (file: File): ShareResult => {
   const url = URL.createObjectURL(file);
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = file.name;
+  anchor.style.display = 'none';
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  return 'downloaded';
 };
 
 export const createPosterFile = async (node: HTMLElement, fileName: string): Promise<File> => {
@@ -38,6 +40,5 @@ export const shareOrDownloadFile = async (
       if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled';
     }
   }
-  downloadFile(file);
-  return 'downloaded';
+  return downloadPosterFile(file);
 };
