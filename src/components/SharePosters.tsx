@@ -50,11 +50,11 @@ export const PosterExportHost: React.FC<PosterExportHostProps> = ({ job, onCompl
     frameId = window.requestAnimationFrame(() => {
       frameId = window.requestAnimationFrame(async () => {
         try {
-          const { createPosterFile, shareOrDownloadFile } = await import('../lib/imageShare');
+          const { createPosterFile, downloadPosterFile } = await import('../lib/imageShare');
           if (cancelled || !posterRef.current) return;
           const file = await createPosterFile(posterRef.current, job.fileName);
           if (cancelled) return;
-          const result = await shareOrDownloadFile(file, job.title, job.text);
+          const result = downloadPosterFile(file);
           if (!cancelled) onComplete(result);
         } catch (error) {
           if (!cancelled) onError(error instanceof Error ? error.message : '长图生成失败，请稍后重试');
@@ -160,66 +160,70 @@ export const CalendarSharePoster: React.FC<CalendarSharePosterProps> = ({
   className,
   semester,
   generatedAt
-}) => (
-  <article
-    data-testid="calendar-share-poster"
-    className="w-[750px] bg-slate-50 p-12 text-slate-900"
-    style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
-  >
-    <header className="rounded-[32px] bg-linear-to-br from-slate-950 to-indigo-800 px-10 py-9 text-white shadow-xl">
-      <p className="text-[22px] font-bold tracking-[0.22em] text-indigo-200">UPCOMING 30 DAYS</p>
-      <h1 className="mt-3 text-[42px] font-black leading-tight">{className || '班级空间'} · 近期日程</h1>
-      <p className="mt-3 text-[22px] text-indigo-100">{semester || '未来 30 天'} · 共 {entries.length} 项</p>
-    </header>
-
-    <div className="mt-8 space-y-5">
-      {entries.length === 0 ? (
-        <div className="rounded-[28px] border border-slate-200 bg-white px-9 py-12 text-center text-[24px] text-slate-500">
-          未来 30 天暂无日程
-        </div>
-      ) : entries.map((entry) => {
-        const countdownTarget = entry.startsAt || shanghaiDateToEndMs(entry.date);
-        return (
-          <section key={entry.id} className="rounded-[28px] border border-slate-200 bg-white px-8 py-7 shadow-md">
-            <div className="flex items-start justify-between gap-5">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-3">
-                  <span className={`rounded-full px-4 py-1.5 text-[17px] font-bold ${
-                    entry.source === 'notice'
-                      ? 'bg-rose-50 text-rose-700'
-                      : 'bg-indigo-50 text-indigo-700'
-                  }`}>
-                    {EVENT_LABELS[entry.category]}
-                  </span>
-                  <span className="text-[18px] font-semibold text-slate-500">
-                    {entry.startsAt ? formatShanghaiDateTime(entry.startsAt) : entry.date}
-                  </span>
-                </div>
-                <h2 className="mt-4 text-[29px] font-black leading-tight text-slate-950">{entry.title}</h2>
-                {entry.description ? (
-                  <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-[20px] leading-relaxed text-slate-600">
-                    {entry.description}
-                  </p>
-                ) : null}
-                {entry.location ? (
-                  <p className="mt-3 text-[19px] font-semibold text-slate-500">地点：{entry.location}</p>
-                ) : null}
-              </div>
-              <span className={`shrink-0 rounded-2xl px-4 py-3 text-[18px] font-black ${
-                entry.source === 'notice'
-                  ? 'bg-rose-600 text-white'
-                  : 'bg-slate-100 text-slate-700'
-              }`}>
-                {formatCountdown(countdownTarget, generatedAt)}
+}) => {
+  const schoolEntries = entries.filter((entry) => entry.source === 'schoolEvent');
+  const ddlEntries = entries.filter((entry) => entry.source === 'notice');
+  const renderEntry = (entry: CalendarEntry) => {
+    const countdownTarget = entry.startsAt || shanghaiDateToEndMs(entry.date);
+    return (
+      <section key={entry.id} className="rounded-[24px] border border-slate-200 bg-white px-7 py-6 shadow-md">
+        <div className="flex items-start justify-between gap-5">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className={`rounded-full px-4 py-1.5 text-[16px] font-bold ${entry.source === 'notice' ? 'bg-rose-50 text-rose-700' : 'bg-indigo-50 text-indigo-700'}`}>
+                {EVENT_LABELS[entry.category]}
+              </span>
+              <span className="text-[17px] font-semibold text-slate-500">
+                {entry.startsAt ? formatShanghaiDateTime(entry.startsAt) : entry.date}
               </span>
             </div>
-          </section>
-        );
-      })}
-    </div>
+            <h2 className="mt-3 text-[27px] font-black leading-tight text-slate-950">{entry.title}</h2>
+            {entry.description ? <p className="mt-3 line-clamp-3 whitespace-pre-wrap text-[19px] leading-relaxed text-slate-600">{entry.description}</p> : null}
+            {entry.location ? <p className="mt-3 text-[18px] font-semibold text-slate-500">地点：{entry.location}</p> : null}
+          </div>
+          <span className={`shrink-0 rounded-2xl px-4 py-3 text-[17px] font-black ${entry.source === 'notice' ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-700'}`}>
+            {formatCountdown(countdownTarget, generatedAt)}
+          </span>
+        </div>
+      </section>
+    );
+  };
 
-    <footer className="px-4 pb-2 pt-7 text-center text-[17px] text-slate-500">
-      倒计时为导出时快照 · 生成于 {formatShanghaiDateTime(generatedAt)}
-    </footer>
-  </article>
-);
+  return (
+    <article
+      data-testid="calendar-share-poster"
+      className="w-[750px] bg-slate-50 p-12 text-slate-900"
+      style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}
+    >
+      <header className="rounded-[32px] bg-linear-to-br from-slate-950 to-indigo-800 px-10 py-9 text-white shadow-xl">
+        <p className="text-[22px] font-bold tracking-[0.22em] text-indigo-200">UPCOMING 30 DAYS</p>
+        <h1 className="mt-3 text-[42px] font-black leading-tight">{className || '班级空间'} · 近期日程</h1>
+        <p className="mt-3 text-[22px] text-indigo-100">{semester || '未来 30 天'} · 共 {entries.length} 项</p>
+      </header>
+
+      <div className="mt-8">
+        <div className="mb-4 flex items-end justify-between px-2">
+          <h2 className="text-[26px] font-black text-slate-950">学校校历</h2>
+          <span className="text-[18px] font-bold text-slate-500">{schoolEntries.length} 项</span>
+        </div>
+        <div className="space-y-4">
+          {schoolEntries.length > 0 ? schoolEntries.map(renderEntry) : <div className="rounded-[24px] border border-slate-200 bg-white px-8 py-9 text-center text-[21px] text-slate-500">未来 30 天暂无学校校历事件</div>}
+        </div>
+      </div>
+
+      <div className="mt-9 border-t-2 border-slate-200 pt-8">
+        <div className="mb-4 flex items-end justify-between px-2">
+          <h2 className="text-[26px] font-black text-slate-950">同步 DDL</h2>
+          <span className="text-[18px] font-bold text-rose-600">{ddlEntries.length} 项</span>
+        </div>
+        <div className="space-y-4">
+          {ddlEntries.length > 0 ? ddlEntries.map(renderEntry) : <div className="rounded-[24px] border border-slate-200 bg-white px-8 py-9 text-center text-[21px] text-slate-500">未来 30 天暂无同步 DDL</div>}
+        </div>
+      </div>
+
+      <footer className="px-4 pb-2 pt-7 text-center text-[17px] text-slate-500">
+        倒计时为导出时快照 · 生成于 {formatShanghaiDateTime(generatedAt)}
+      </footer>
+    </article>
+  );
+};
