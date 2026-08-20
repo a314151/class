@@ -1,5 +1,6 @@
 {
   "name": "class",
+  "account_id": "480682d8a82a0c6664d46f334a6bd505",
   "compatibility_date": "2026-06-24",
   "main": "./worker/index.ts",
   "assets": {
